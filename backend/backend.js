@@ -40,6 +40,7 @@ const RULEBOOKS_DB_PATH = path.join(DB_DIR, 'rulebooks.json');
 const COMPLIANCE_DB_PATH = path.join(DB_DIR, 'compliance.json');
 const TEST_QUESTIONS_DB_PATH = path.join(DB_DIR, 'test_questions.json');
 const SHARES_DB_PATH = path.join(DB_DIR, 'shares.json');
+const SQL_CONNECTIONS_DB_PATH = path.join(DB_DIR, 'sql_connections.json');
 const UPLOAD_FOLDER = path.join(__dirname, 'data', 'uploads');
 
 fs.mkdirSync(CHAT_HISTORY_DIR, { recursive: true });
@@ -63,7 +64,7 @@ const AI_SERVER_URL = process.env.AI_SERVER_URL;
 
 // Environment Detection
 const hostname = os.hostname().toUpperCase();
-const isLocal = [""].some(keyword => hostname.includes(keyword));
+const isLocal = ["I3ADMIN-PRECISION-TOWER-5810"].some(keyword => hostname.includes(keyword));
 logger.info(`🖥️ Server Hostname: ${hostname}`);
 logger.info(`🏠 Is Local Environment: ${isLocal}`);
 
@@ -140,6 +141,8 @@ const readTestQuestions = readJsonDb(TEST_QUESTIONS_DB_PATH);
 const writeTestQuestions = writeJsonDb(TEST_QUESTIONS_DB_PATH);
 const readShares = readJsonDb(SHARES_DB_PATH);
 const writeShares = writeJsonDb(SHARES_DB_PATH);
+const readSqlConnections = readJsonDb(SQL_CONNECTIONS_DB_PATH);
+const writeSqlConnections = writeJsonDb(SQL_CONNECTIONS_DB_PATH);
 
 
 const clearAiServerCache = async () => {
@@ -416,7 +419,10 @@ app.get('/api/rag/files/download-zip', async (req, res) => {
 
 // Delete a single file
 app.delete('/api/rag/files/delete', async (req, res) => {
-  const { username, category, filename } = req.query;
+  const username = req.query.username || req.body.username;
+  const category = req.query.category || req.body.category;
+  const filename = req.query.filename || req.body.filename;
+
   if (!username || !category || !filename) return res.status(400).json({ error: 'Missing params' });
   if (filename.includes('..') || category.includes('..')) return res.status(403).json({ error: 'Invalid path' });
 
@@ -455,7 +461,7 @@ app.get('/api/rag/structure', async (req, res) => {
     let permissionsModified = false;
 
     if (structureData && structureData[username]) {
-      structureData[username] = structureData[username].map(category => {
+      structureData[username] = await Promise.all(structureData[username].map(async category => {
         const categoryId = `${username}-${category.name}`;
         let categoryPermissions = allPermissions[categoryId];
 
@@ -473,8 +479,25 @@ app.get('/api/rag/structure', async (req, res) => {
           logger.info('Auto-created missing permission entry for category', { categoryId });
         }
 
+        // Enrich file list with stats from the filesystem
+        let enrichedFiles = [];
+        if (Array.isArray(category.files)) {
+          enrichedFiles = await Promise.all(category.files.map(async (f) => {
+            const fileName = typeof f === 'string' ? f : f.name;
+            const filePath = path.join(UPLOAD_FOLDER, username, category.name, fileName);
+            try {
+              const stats = await fsp.stat(filePath);
+              return { name: fileName, size: stats.size, added: stats.birthtime };
+            } catch (ignore) {
+              // If file not found on disk, return default
+              return { name: fileName, size: 0, added: null };
+            }
+          }));
+        }
+
         return {
           ...category,
+          files: enrichedFiles,
           permissions: {
             business: categoryPermissions.business,
             basic: categoryPermissions.basic
@@ -482,7 +505,7 @@ app.get('/api/rag/structure', async (req, res) => {
           personaId: categoryPermissions.personaId || null,
           complianceProfileId: categoryPermissions.complianceProfileId || null
         };
-      });
+      }));
 
       if (permissionsModified) {
         await writePermissions(allPermissions);
@@ -535,6 +558,22 @@ app.post('/api/chat/history/:username/:role/:category', async (req, res) => {
   } catch (e) {
     logger.error('Failed to write chat history', { username, role, category, error: e.message });
     res.status(500).json({ error: 'Failed to save chat history.' });
+  }
+});
+
+app.delete('/api/chat/history/:username/:role/:category', async (req, res) => {
+  const { username, role, category } = req.params;
+  try {
+    const filePath = await getHistoryFilePath(username, role, category);
+    if (fs.existsSync(filePath)) {
+      await fsp.unlink(filePath);
+      res.json({ message: 'History deleted.' });
+    } else {
+      res.status(404).json({ error: 'No history found.' });
+    }
+  } catch (e) {
+    logger.error('Failed to delete chat history', { username, role, category, error: e.message });
+    res.status(500).json({ error: 'Failed to delete history.' });
   }
 });
 
@@ -686,9 +725,103 @@ app.post('/api/chat/process-file', memoryUpload.single('file'), async (req, res)
 // ============================================================================
 // 12.5) SQL AGENT ENDPOINTS (New)
 // ============================================================================
-app.post('/api/sql_agent/connect', proxyToAiServer('api/sql_agent/connect', 'post'));
-app.delete('/api/sql_agent/connect', proxyToAiServer('api/sql_agent/connect', 'delete'));
-app.get('/api/sql_agent/config', proxyToAiServer('api/sql_agent/config', 'get'));
+app.post('/api/sql_agent/connect', async (req, res) => {
+  const { firm_id, db_config } = req.body;
+
+  // 1. First, try to connect via AI Server (Validation)
+  const proxy = proxyToAiServer('api/sql_agent/connect', 'post');
+
+  // We wrap the proxy response to intercept success
+  const originalJson = res.json;
+  const originalStatus = res.status;
+
+  let proxyStatusCode = 200;
+
+  res.status = (code) => {
+    proxyStatusCode = code;
+    return originalStatus.call(res, code);
+  };
+
+  res.json = async (data) => {
+    // If connection was successful, save to local JSON
+    if (proxyStatusCode >= 200 && proxyStatusCode < 300) {
+      try {
+        const connections = await readSqlConnections();
+        let firmConfigs = connections[firm_id];
+
+        if (!firmConfigs) firmConfigs = [];
+        if (!Array.isArray(firmConfigs)) firmConfigs = [firmConfigs]; // Migration
+
+        const idx = firmConfigs.findIndex(c => c.database === db_config.database && c.host === db_config.host);
+        if (idx !== -1) {
+          firmConfigs[idx] = db_config;
+        } else {
+          firmConfigs.push(db_config);
+        }
+
+        connections[firm_id] = firmConfigs;
+        await writeSqlConnections(connections);
+        logger.info('Saved SQL connection locally for firm', { firm_id });
+      } catch (e) {
+        logger.error('Failed to save SQL connection locally', { error: e.message });
+      }
+    }
+    return originalJson.call(res, data);
+  };
+
+  await proxy(req, res);
+});
+
+app.delete('/api/sql_agent/connect', async (req, res) => {
+  const { firm_id, database } = req.body;
+
+  const proxy = proxyToAiServer('api/sql_agent/connect', 'delete');
+
+  const originalJson = res.json;
+  const originalStatus = res.status;
+  let proxyStatusCode = 200;
+
+  res.status = (code) => {
+    proxyStatusCode = code;
+    return originalStatus.call(res, code);
+  };
+
+  res.json = async (data) => {
+    if (proxyStatusCode >= 200 && proxyStatusCode < 300) {
+      try {
+        const connections = await readSqlConnections();
+        let firmConfigs = connections[firm_id];
+
+        if (firmConfigs) {
+          if (database && Array.isArray(firmConfigs)) {
+            connections[firm_id] = firmConfigs.filter(c => c.database !== database);
+          } else {
+            if (!database) delete connections[firm_id];
+          }
+          await writeSqlConnections(connections);
+          logger.info('Deleted SQL connection locally for firm', { firm_id });
+        }
+      } catch (e) {
+        logger.error('Failed to delete SQL connection locally', { error: e.message });
+      }
+    }
+    return originalJson.call(res, data);
+  };
+
+  await proxy(req, res);
+});
+
+app.get('/api/sql_agent/config', async (req, res) => {
+  const { firm_id } = req.query;
+  try {
+    const connections = await readSqlConnections();
+    const config = connections[firm_id] || [];
+    res.json(config);
+  } catch (e) {
+    logger.error('Failed to get SQL config', { error: e.message });
+    res.status(500).json({ error: 'Failed to retrieve configuration' });
+  }
+});
 app.get('/api/sql_agent/test', proxyToAiServer('api/sql_agent/test', 'get'));
 // Redirect generate to the new RAG-enabled endpoint
 app.post('/api/sql_agent/generate', proxyToAiServer('api/sql_agent_rag/generate', 'post'));
@@ -903,7 +1036,7 @@ app.post('/api/rag/run-test', async (req, res) => {
 
 // UNIFIED ENDPOINT: Securely provides the correct list of RAGs for any user.
 app.get('/api/rag/viewable', async (req, res) => {
-  const { userId, userRole } = req.query;
+  const { userId, userRole, firmId } = req.query;
   if (!userId || !userRole) {
     return res.status(400).json({ error: 'userId and userRole are required' });
   }
@@ -912,39 +1045,47 @@ app.get('/api/rag/viewable', async (req, res) => {
     const allPermissions = await readPermissions();
     let categoriesToStatusCheck = new Map();
 
-    // 1. Get the user's own categories if they are an admin
+    // 1. Fetch Firm-Level Categories (Primary)
+    if (firmId) {
+      try {
+        const firmResp = await axios.get(`${AI_SERVER_URL}/structure/${encodeURIComponent(firmId)}`);
+        const firmCats = firmResp.data?.[firmId] || [];
+
+        firmCats.forEach(cat => {
+          const key = `${firmId}-${cat.name}`;
+          // Admin sees all. Others check permissions.
+          if (userRole === 'admin') {
+            categoriesToStatusCheck.set(key, { name: cat.name, owner: String(firmId) });
+          } else {
+            const perm = allPermissions[key];
+            if (perm && (perm[userRole] === true)) {
+              categoriesToStatusCheck.set(key, { name: cat.name, owner: String(firmId) });
+            }
+          }
+        });
+      } catch (e) {
+        if (e.response?.status !== 404) logger.warn('Could not get firm categories', { firmId, error: e.message });
+      }
+    }
+
+    // 2. Legacy/User Level (Keep for backward compatibility or mixed usage)
+    // If user is admin, they can see their own legacy KBs
     if (userRole === 'admin') {
       try {
         const ownResp = await axios.get(`${AI_SERVER_URL}/structure/${encodeURIComponent(userId)}`);
         const userCats = ownResp.data?.[userId] || [];
         userCats.forEach(cat => categoriesToStatusCheck.set(`${userId}-${cat.name}`, { name: cat.name, owner: userId }));
-      } catch (e) {
-        if (e.response?.status !== 404) {
-          logger.warn('Could not get own categories for admin', { userId, error: e.message });
-        }
-      }
+      } catch (e) { /* ignore 404 */ }
     }
 
-    // FIX: Re-introduce role-based access logic.
-    // Get categories based on the user's role (business/basic) from the toggles.
-    if (['business', 'basic'].includes(userRole)) {
-      Object.values(allPermissions)
-        .filter(perm => perm && perm[userRole] === true)
-        .forEach(perm => {
-          categoriesToStatusCheck.set(`${perm.owner}-${perm.categoryName}`, { name: perm.categoryName, owner: perm.owner });
-        });
-    }
-
-    // 2. Get categories shared specifically with this user
+    // 3. Shared Categories
     const shares = await readShares();
     const userShares = shares[userId] || [];
-
     userShares.forEach(share => {
       if (share.ownerId && share.categoryName) {
         categoriesToStatusCheck.set(`${share.ownerId}-${share.categoryName}`, { name: share.categoryName, owner: String(share.ownerId) });
       }
     });
-
 
     const categoryList = Array.from(categoriesToStatusCheck.values());
     if (categoryList.length === 0) {

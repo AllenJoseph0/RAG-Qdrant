@@ -35,3 +35,4 @@ backend/venv
 backend/Voices-Models
 backend/package-lock.json
 backend/__pycache__
+frontend/node_modules

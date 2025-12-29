@@ -66,10 +66,11 @@ def get_config():
     return jsonify({"success": False, "message": "No configuration found"}), 404
 
 @sql_bp.route('/test', methods=['GET'])
-def test_saved_connection():
+def test_db_connection_route():
     firm_id = request.args.get('firm_id')
     user_id = request.args.get('user_id')
     refresh = request.args.get('refresh', 'false').lower() == 'true'
+    db_name = request.args.get('db_name')
     
     if not firm_id:
         return jsonify({"error": "firm_id required"}), 400
@@ -80,7 +81,7 @@ def test_saved_connection():
         if time.time() - entry['timestamp'] < CACHE_DURATION:
             return jsonify(entry['result'])
         
-    config = get_db_connection_config(firm_id)
+    config = get_db_connection_config(firm_id, db_name=db_name)
     if not config:
         return jsonify({"success": False, "message": "Database not configured. Please add details below."}), 200
         
@@ -110,20 +111,7 @@ def generate_sql():
         
     return jsonify(result)
 
-@sql_bp.route('/execute', methods=['POST'])
-def execute_sql():
-    data = request.json
-    firm_id = data.get('firm_id')
-    sql = data.get('sql')
-    
-    if not firm_id or not sql:
-        return jsonify({"error": "firm_id and sql required"}), 400
-        
-    result = execute_generated_sql(sql, firm_id)
-    if not result['success']:
-        return jsonify(result), 500
-        
-    return jsonify(result)
+
 
 @sql_bp.route('/ask', methods=['POST'])
 def ask_question():
@@ -150,3 +138,25 @@ def ask_question():
         "sql": sql,
         "message": "SQL generated successfully. Execution skipped."
     })
+
+@sql_bp.route('/sync', methods=['POST'])
+def sync_schema_endpoint():
+    data = request.json
+    firm_id = data.get('firm_id')
+    
+    if not firm_id:
+        return jsonify({"error": "firm_id required"}), 400
+
+    db_name = data.get('db_name')
+    # Get saved config
+    db_config = get_db_connection_config(firm_id, db_name=db_name)
+    if not db_config:
+        return jsonify({"error": "Database not configured for this firm"}), 400
+
+    from .sql_service import sync_schema_vector_store
+    success = sync_schema_vector_store(firm_id, db_config)
+    
+    if success:
+        return jsonify({"success": True, "message": "Schema synced to vector store."})
+    else:
+        return jsonify({"success": False, "error": "Failed to sync schema."}), 500

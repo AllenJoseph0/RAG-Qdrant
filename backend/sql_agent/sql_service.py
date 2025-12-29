@@ -56,29 +56,85 @@ def _save_profiles(profiles: Dict[str, Any]):
         json.dump(profiles, f, indent=4)
 
 def save_db_connection(firm_id: str, db_config: Dict[str, Any]):
-    """Save database connection details for a firm."""
+    """Save database connection details for a firm. Supports multiple DBs."""
     profiles = _load_profiles()
+    fid = str(firm_id)
+    
     # Basic validation
     required = ['host', 'user', 'password', 'database', 'port']
     if not all(k in db_config for k in required):
         raise ValueError(f"Missing required DB fields. Need: {required}")
+
+    if fid not in profiles:
+        profiles[fid] = []
     
-    # Store securely (in a real app, encrypt the password)
-    profiles[str(firm_id)] = db_config
+    # Migration: if value is dict (legacy), convert to list
+    if isinstance(profiles[fid], dict):
+        profiles[fid] = [profiles[fid]]
+        
+    # Check for duplicate (by database name + host) to update
+    updated = False
+    for i, conf in enumerate(profiles[fid]):
+        if conf.get('database') == db_config.get('database') and conf.get('host') == db_config.get('host'):
+             profiles[fid][i] = db_config
+             updated = True
+             break
+    
+    if not updated:
+        profiles[fid].append(db_config)
+        
     _save_profiles(profiles)
     return True
 
-def get_db_connection_config(firm_id: str) -> Optional[Dict[str, Any]]:
-    """Retrieve database connection details for a firm."""
+def get_db_connection_config(firm_id: str, db_name: str = None) -> Optional[Dict[str, Any]]:
+    """Retrieve database connection details for a firm. Returns first or specific."""
     profiles = _load_profiles()
-    return profiles.get(str(firm_id))
+    fid = str(firm_id)
+    data = profiles.get(fid)
+    
+    if not data: return None
+    
+    if isinstance(data, dict): return data # Legacy single config
+    
+    if isinstance(data, list) and len(data) > 0:
+        if db_name:
+             for d in data:
+                 if d.get('database') == db_name: return d
+        return data[0] # Return first as default if specific not found or requested
+        
+    return None
 
-def delete_db_connection(firm_id: str) -> bool:
-    """Delete database connection details for a firm."""
+def get_all_db_configs(firm_id: str) -> List[Dict[str, Any]]:
+     """Return all configs for a firm."""
+     profiles = _load_profiles()
+     fid = str(firm_id)
+     data = profiles.get(fid)
+     if not data: return []
+     if isinstance(data, dict): return [data]
+     return data
+
+def delete_db_connection(firm_id: str, db_name: str = None) -> bool:
+    """Delete database connection details for a firm. Optional db_name to delete specific."""
     profiles = _load_profiles()
-    str_firm_id = str(firm_id)
-    if str_firm_id in profiles:
-        del profiles[str_firm_id]
+    fid = str(firm_id)
+    if fid not in profiles: return False
+    
+    if db_name:
+        if isinstance(profiles[fid], list):
+             initial_len = len(profiles[fid])
+             profiles[fid] = [d for d in profiles[fid] if d.get('database') != db_name]
+             if len(profiles[fid]) < initial_len:
+                 _save_profiles(profiles)
+                 return True
+             return False
+        elif isinstance(profiles[fid], dict):
+             if profiles[fid].get('database') == db_name:
+                 del profiles[fid]
+                 _save_profiles(profiles)
+                 return True
+             return False
+    else:
+        del profiles[fid]
         _save_profiles(profiles)
         return True
     return False
@@ -433,7 +489,7 @@ def generate_sql_query(user_query: str, firm_id: str, user_id: int = None, groq_
         client = Groq(api_key=groq_api_key)
         
         prompt = f"""
-You are an expert MySQL Data Analyst. 
+You are an expert MySQL Data Analyst and Database Administrator.
 Given the following database schema and sample data, write a SQL query to answer the user's question.
 
 Schema Context:
@@ -443,10 +499,12 @@ User Question: {user_query}
 
 Instructions:
 1. Return ONLY the SQL query. No markdown formatting, no explanations.
-2. If the user asks for "all today", use the CURDATE() function.
-3. Handle complex joins if tables are related by naming conventions (e.g. vendor_id).
-4. Do not limit results unless specified.
-5. Ensure valid MySQL syntax.
+2. If the user asks for data (e.g. "show me", "list", "who"), write a SELECT query.
+3. If the user asks for the CREATE statement, table definition, or "create query", use 'SHOW CREATE TABLE <tablename>'.
+4. If the user asks for "all today", use the CURDATE() function.
+5. Handle complex joins if tables are related by naming conventions (e.g. vendor_id).
+6. Do not limit results unless specified.
+7. Ensure valid MySQL syntax.
 
 SQL:
 """

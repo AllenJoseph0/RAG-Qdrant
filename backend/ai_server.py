@@ -145,18 +145,7 @@ except Exception:
 GOOGLE_VOICES_CACHE = {}
 VISION_MODEL_CACHE = {}
 
-# -----------------------------------------------------------------------------
-# Environment Detection
-# -----------------------------------------------------------------------------
-try:
-    HOSTNAME = socket.gethostname().upper()
-    IS_LOCAL = any(keyword in HOSTNAME for keyword in ["I3ADMIN-PRECISION-TOWER-5810"])
-    logger.info(f"🖥️  Server Hostname: {HOSTNAME}")
-    logger.info(f"🏠 Is Local Environment: {IS_LOCAL}")
-except Exception as e:
-    HOSTNAME = "UNKNOWN"
-    IS_LOCAL = False
-    logger.warning(f"Failed to get hostname: {e}")
+
 
 # -----------------------------------------------------------------------------
 # Model init
@@ -211,9 +200,7 @@ CORS(app)
 app.register_blueprint(sql_bp, url_prefix='/api/sql_agent')
 app.register_blueprint(mcp_bp, url_prefix='') # Mounts /sse and /messages at root
 
-@app.route("/env-check", methods=["GET"])
-def env_check():
-    return jsonify({"is_local": IS_LOCAL, "hostname": HOSTNAME})
+
 
 RETRIEVER_CACHE: Dict[str, Any] = {}
 MEMORY_SESSIONS: Dict[str, ConversationSummaryBufferMemory] = {}
@@ -387,9 +374,10 @@ Do not include extra explanations, examples, or commentary — output only the l
     final_stages = [s.strip() for s in generated_stages_str.split(",") if s.strip()]
 
     personas = _load_personas()
-    persona_id = str(uuid4())
+    persona_id = f"{firm_id}-{uuid4()}"
     personas[persona_id] = {
         "id": persona_id,
+        "firm_id": firm_id,
         "name": name,
         "prompt": generated_prompt,
         "voice_prompt": generated_voice_prompt,
@@ -401,8 +389,19 @@ Do not include extra explanations, examples, or commentary — output only the l
 
 @app.route("/personas", methods=["GET"])
 def get_personas():
-    """Endpoint to retrieve all configured personas."""
-    return jsonify(list(_load_personas().values()))
+    """Endpoint to retrieve all configured personas for a specific firm."""
+    firm_id = request.args.get('firm_id')
+    all_personas = list(_load_personas().values())
+    if firm_id:
+        # Filter by firm_id if provided
+        return jsonify([p for p in all_personas if str(p.get('firm_id')) == str(firm_id)])
+    # Fallback/Admin behavior: return all or maybe just return empty if strict?
+    # For now, if no firm_id, return empty list to be safe, or all for super-admin debugging.
+    # Given the requirement, let's return all but log warning, or empty.
+    # Safe default: return empty if no firm_id to prevent leak
+    if not firm_id:
+        return jsonify([])
+    return jsonify(all_personas)
 
 
 @app.route("/personas/<persona_id>", methods=["PUT"])
