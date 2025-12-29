@@ -64,7 +64,7 @@ const AI_SERVER_URL = process.env.AI_SERVER_URL;
 
 // Environment Detection
 const hostname = os.hostname().toUpperCase();
-const isLocal = ["I3ADMIN-PRECISION-TOWER-5810"].some(keyword => hostname.includes(keyword));
+const isLocal = ["Test"].some(keyword => hostname.includes(keyword));
 logger.info(`🖥️ Server Hostname: ${hostname}`);
 logger.info(`🏠 Is Local Environment: ${isLocal}`);
 

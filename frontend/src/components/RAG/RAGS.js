@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation, Routes, Route, Navigate } from 'react-router-dom';
 import Cookies from 'js-cookie';
 import { BrainCircuit } from 'lucide-react';
 import styles from './rag.styles.js';
@@ -14,9 +14,10 @@ import QueryView from './QueryView';
 // Main App Component
 // ==============================================================================
 const RAGS = () => {
-    const [view, setView] = useState('dashboard');
+    // view state removed
     const [currentUser, setCurrentUser] = useState(null);
     const navigate = useNavigate();
+    const location = useLocation();
     const [showDevLogin, setShowDevLogin] = useState(false);
     // Track if we are in "dev mode" (untrusted device)
     const [isDevMode, setIsDevMode] = useState(false);
@@ -54,7 +55,10 @@ const RAGS = () => {
             axios.post(`${RAG_BACKEND_URL}/api/users/sync`, user).catch(err => console.error("Failed to sync user", err));
 
             if (role === 'business' || role === 'basic') {
-                setView('query');
+                // Determine if we need to redirect
+                if (window.location.pathname.includes('/dashboard')) {
+                    navigate('/rag');
+                }
             }
         } else {
             navigate('/');
@@ -200,22 +204,31 @@ const RAGS = () => {
 
     const renderNav = () => currentUser.role === 'admin' ? (
         <div style={styles.navButtonGroup}>
-            <button onClick={() => setView('dashboard')} style={view === 'dashboard' ? styles.navButtonActive : styles.navButton}>Dashboard</button>
-            <button onClick={() => setView('query')} style={view === 'query' ? styles.navButtonActive : styles.navButton}>Query RAG</button>
+            <button
+                onClick={() => navigate('/rag/dashboard')}
+                style={location.pathname === '/rag/dashboard' ? styles.navButtonActive : styles.navButton}
+            >
+                Dashboard
+            </button>
+            <button
+                onClick={() => navigate('/rag')}
+                style={location.pathname === '/rag' ? styles.navButtonActive : styles.navButton}
+            >
+                Query RAG
+            </button>
         </div>
     ) : null;
 
-    const renderView = () => {
-        switch (currentUser.role) {
-            case 'admin':
-                return view === 'query' ? <QueryView currentUser={currentUser} /> : <DashboardPage currentUser={currentUser} />;
-            case 'business':
-            case 'basic':
-                return <QueryView currentUser={currentUser} />;
-            default:
-                return <div>Invalid user role.</div>
-        }
-    }
+    const renderRoutes = () => (
+        <Routes>
+            <Route path="/rag/dashboard" element={
+                currentUser.role === 'admin' ? <DashboardPage currentUser={currentUser} /> : <Navigate to="/rag" replace />
+            } />
+            <Route path="/rag" element={<QueryView currentUser={currentUser} />} />
+            <Route path="/" element={<Navigate to="/rag" replace />} />
+            <Route path="*" element={<Navigate to="/rag" replace />} />
+        </Routes>
+    );
 
     return (
         <div style={styles.appContainer}>
@@ -252,7 +265,7 @@ const RAGS = () => {
                     )}
                 </div>
             </nav>
-            <main style={styles.mainContent}>{renderView()}</main>
+            <main style={styles.mainContent}>{renderRoutes()}</main>
         </div>
     );
 };

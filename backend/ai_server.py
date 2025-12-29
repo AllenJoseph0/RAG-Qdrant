@@ -59,7 +59,9 @@ from elevenlabs.client import ElevenLabs
 from deepgram import DeepgramClient
 
 # SQL Agent Integration
-from sql_agent import sql_bp, mcp_bp
+from mcp_routers import sql_bp
+from mcp_routers.sql_mcp import mcp_bp
+from mcp_routers.file_mcp import file_mcp_bp
 
 load_dotenv()
 
@@ -179,7 +181,7 @@ try:
     logger.info(f"Piper ready with {len(PIPER_VOICES)} configured voice(s)")
 
     # Inject shared components into SQL Service
-    import sql_agent.sql_service as sql_service
+    import mcp_routers.sql_service as sql_service
     sql_service.initialize_rag_components(embeddings, qdrant)
     logger.info("SQL Agent RAG components initialized")
 
@@ -196,9 +198,13 @@ except Exception as e:
 app = Flask(__name__)
 CORS(app)
 
+# Register MCP Blueprints
+app.register_blueprint(mcp_bp, url_prefix='/mcp/sql')
+app.register_blueprint(file_mcp_bp, url_prefix='/mcp/file')
+logger.info("MCP Blueprints registered: SQL Agent (/mcp/sql/sse), File Upload (/mcp/file/sse)")
+
 # Register Blueprints
 app.register_blueprint(sql_bp, url_prefix='/api/sql_agent')
-app.register_blueprint(mcp_bp, url_prefix='') # Mounts /sse and /messages at root
 
 
 
@@ -1088,7 +1094,7 @@ def sql_generation_node(state: GraphState) -> GraphState:
     logger.info("---LANGGRAPH NODE: sql_generation_node---")
     
     try:
-        from sql_agent.sql_service import execute_generated_sql
+        from mcp_routers.sql_service import execute_generated_sql
         
         firm_id = state['firm_id']
         question = state['question']
@@ -2301,7 +2307,7 @@ def run_rag_test():
 # -----------------------------------------------------------------------------
 # SQL RAG Integration
 # -----------------------------------------------------------------------------
-from sql_agent.sql_service import extract_schema_documents, get_db_connection_config, fetch_llm_api_key
+from mcp_routers.sql_service import extract_schema_documents, get_db_connection_config, fetch_llm_api_key
 
 @app.route("/api/sql_agent_rag/sync", methods=["POST"])
 def sync_sql_schema():
@@ -2316,7 +2322,7 @@ def sync_sql_schema():
         
     try:
         # Extract schema documents (now returns list of Document objects)
-        from sql_agent.sql_service import extract_schema_documents
+        from mcp_routers.sql_service import extract_schema_documents
         lc_docs = extract_schema_documents(db_config)
         
         # No need to manually wrap in Document again as extract_schema_documents does it.

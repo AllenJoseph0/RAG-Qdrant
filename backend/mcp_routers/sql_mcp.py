@@ -24,7 +24,7 @@ except ImportError:
 
 # Import service functions
 try:
-    from sql_agent.sql_service import generate_sql_query, execute_generated_sql
+    from mcp_routers.sql_service import generate_sql_query, execute_generated_sql
 except ImportError:
     try:
         from sql_service import generate_sql_query, execute_generated_sql
@@ -64,6 +64,10 @@ async def list_tools() -> list[Tool]:
                     "user_id": {
                         "type": "string", 
                         "description": "The ID of the user executing the query."
+                    },
+                    "db_name": {
+                        "type": "string",
+                        "description": "Optional: Specific database name to query (if firm has multiple databases)."
                     }
                 },
                 "required": ["question", "firm_id"]
@@ -82,6 +86,7 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent | types
     question = arguments.get("question")
     firm_id = arguments.get("firm_id")
     user_id = arguments.get("user_id")
+    db_name = arguments.get("db_name")  # Optional
     
     if not question or not firm_id:
         return [TextContent(type="text", text="Error: Missing 'question' or 'firm_id'")]
@@ -93,10 +98,10 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent | types
     except ValueError:
         pass
 
-    logger.info(f"Executing query_db: {question} (Firm: {firm_id})")
+    logger.info(f"Executing query_db: {question} (Firm: {firm_id}, DB: {db_name or 'default'})")
     
     # 1. Generate SQL
-    gen_result = generate_sql_query(question, firm_id, user_id=user_id)
+    gen_result = generate_sql_query(question, firm_id, user_id=user_id, db_name=db_name)
     if not gen_result['success']:
         return [TextContent(type="text", text=f"Error Generating SQL: {gen_result.get('error')}")]
     

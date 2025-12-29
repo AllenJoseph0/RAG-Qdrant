@@ -5,7 +5,7 @@ from mcp.client.sse import sse_client
 from mcp.client.session import ClientSession
 import requests
 
-API_BASE_URL = "http://localhost:8352" # Backend API Base URL
+API_BASE_URL = "http://localhost:8351" # Backend.js (Node.js proxy)
 
 # Page Configuration
 st.set_page_config(
@@ -34,21 +34,58 @@ with st.sidebar:
     
     st.header("🗄️ Database Configuration")
     
-    # Check if config exists for this firm
-    fetched_config = {}
+    # Fetch all configs for this firm
+    all_configs = []
     if default_firm_id:
         try:
-            # We use a reduced timeout so it doesn't hang UI if backend is down
-            check_resp = requests.get(f"{API_BASE_URL}/api/sql_agent/config", params={"firm_id": default_firm_id}, timeout=2)
+            check_resp = requests.get(f"{API_BASE_URL}/api/sql_agent/config", params={
+                "firm_id": default_firm_id
+            }, timeout=2)
+            
             if check_resp.status_code == 200:
                 data = check_resp.json()
-                if data.get("success"):
-                   fetched_config = data.get("config", {})
-                   st.caption("✅ Loaded existing config for this Firm ID")
-        except:
-             pass
-
-    with st.expander("Configure Connection", expanded=False):
+                
+                # Handle wrapped response: {'success': True, 'config': [...]}
+                if isinstance(data, dict) and 'config' in data:
+                    config_data = data['config']
+                    if isinstance(config_data, list):
+                        all_configs = config_data
+                    elif isinstance(config_data, dict) and config_data.get("host"):
+                        all_configs = [config_data]
+                # Handle direct response (legacy)
+                elif isinstance(data, list):
+                    all_configs = data
+                elif isinstance(data, dict) and data.get("host"):
+                    all_configs = [data]
+                
+                if all_configs:
+                    st.success(f"✅ Found {len(all_configs)} database(s) for Firm {default_firm_id}")
+                    st.session_state['all_configs'] = all_configs  # Store for later use
+                else:
+                    st.info(f"No databases configured yet for Firm {default_firm_id}")
+        except Exception as e:
+            st.error(f"Could not fetch configs: {e}")
+    
+    # Display existing configs
+    if all_configs:
+        with st.expander(f"📋 Existing Databases ({len(all_configs)})", expanded=False):
+            for idx, cfg in enumerate(all_configs):
+                st.markdown(f"**{idx+1}. {cfg.get('database', 'Unknown')}** @ `{cfg.get('host', 'N/A')}`")
+                st.caption(f"User: {cfg.get('user', 'N/A')} | Port: {cfg.get('port', 3306)}")
+                st.divider()
+    
+    # Add/Edit Database Config
+    with st.expander("➕ Add/Edit Database Connection", expanded=not all_configs):
+        # Option to select existing or create new
+        config_options = ["-- Add New Database --"] + [f"{cfg.get('database')} @ {cfg.get('host')}" for cfg in all_configs]
+        selected_config_idx = st.selectbox("Select Configuration", range(len(config_options)), format_func=lambda x: config_options[x])
+        
+        # Pre-fill if editing
+        if selected_config_idx > 0:
+            fetched_config = all_configs[selected_config_idx - 1]
+        else:
+            fetched_config = {}
+        
         db_host = st.text_input("Host", value=fetched_config.get("host", "localhost"))
         db_user = st.text_input("User", value=fetched_config.get("user", "root"))
         db_pass = st.text_input("Password", value=fetched_config.get("password", ""), type="password")
@@ -71,22 +108,32 @@ with st.sidebar:
                 resp = requests.post(f"{API_BASE_URL}/api/sql_agent/connect", json=payload)
                 if resp.status_code == 200:
                     st.success("Database connected and saved!")
+                    st.rerun()
                 else:
                     st.error(f"Failed: {resp.text}")
             except Exception as e:
                 st.error(f"Request failed: {e}")
+    
+    # Sync Schema
+    if all_configs:
+        # Allow selecting which DB to sync
+        db_to_sync = st.selectbox("Select Database to Sync", [cfg.get('database', 'Unknown') for cfg in all_configs])
         
-    if st.button("🔄 Sync Schema for RAG"):
-        with st.spinner("Indexing schema tables..."):
-            try:
-                payload = {"firm_id": str(default_firm_id)}
-                resp = requests.post(f"{API_BASE_URL}/api/sql_agent_rag/sync", json=payload)
-                if resp.status_code == 200:
-                    st.success(f"Sync Complete: {resp.json().get('message')}")
-                else:
-                    st.error(f"Sync Failed: {resp.text}")
-            except Exception as e:
-                st.error(f"Sync Request failed: {e}")
+        if st.button("🔄 Sync Schema for RAG"):
+            with st.spinner(f"Indexing schema for {db_to_sync}..."):
+                try:
+                    payload = {
+                        "firm_id": str(default_firm_id),
+                        "user_id": str(default_user_id),
+                        "db_name": db_to_sync
+                    }
+                    resp = requests.post(f"{API_BASE_URL}/api/sql_agent/sync", json=payload)
+                    if resp.status_code == 200:
+                        st.success(f"Sync Complete: {resp.json().get('message')}")
+                    else:
+                        st.error(f"Sync Failed: {resp.text}")
+                except Exception as e:
+                    st.error(f"Sync Request failed: {e}")
 
 # --- ASYNC HELPERS ---
 async def list_available_tools(url):
@@ -170,6 +217,12 @@ if 'tools' in st.session_state:
                         val = default_user_id
                     elif arg_name == 'firm_id':
                         val = str(default_firm_id)
+                    elif arg_name == 'db_name' and 'all_configs' in st.session_state and st.session_state['all_configs']:
+                        # Special handling for db_name: show dropdown of available databases
+                        db_names = [cfg.get('database', 'Unknown') for cfg in st.session_state['all_configs']]
+                        selected_db = st.selectbox(label, db_names, help=help_text)
+                        arguments[arg_name] = selected_db
+                        continue  # Skip the normal input handling
                     
                     help_text = arg_desc
                     
