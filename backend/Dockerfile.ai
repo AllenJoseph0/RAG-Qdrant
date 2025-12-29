@@ -1,0 +1,37 @@
+# Use an official Python runtime as a parent image
+FROM python:3.10-slim
+
+# Set the working directory in the container
+WORKDIR /app
+
+# Install system dependencies
+# MODIFIED: Added tesseract-ocr for image processing (OCR)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ffmpeg \
+    tesseract-ocr \
+    libsndfile1 \
+    libmariadb-dev \
+    espeak-ng \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the requirements file into the container
+COPY requirements.txt .
+
+# Install any needed packages specified in requirements.txtcl
+RUN pip install --no-cache-dir -r requirements.txt
+
+# install Spacy
+RUN python -m spacy download en_core_web_sm
+
+# Copy the rest of the application's code into the container
+COPY . .
+
+# Verify text_to_sql module structure
+RUN ls -la /app/text_to_sql/
+RUN ls -la /app/text_to_sql/core/
+
+# Command to run the application
+CMD ["python", "ai_server.py"]
