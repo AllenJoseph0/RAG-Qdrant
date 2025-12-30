@@ -423,7 +423,17 @@ const KnowledgeBaseManager = ({ currentUser }) => {
                         )}
 
                         <label style={{ ...styles.label, marginTop: '1rem' }}>2. Choose Files to Upload</label>
-                        <input type="file" multiple required onChange={e => setFiles(e.target.files)} style={styles.fileInput} />
+                        <input
+                            type="file"
+                            multiple
+                            required
+                            onChange={e => setFiles(e.target.files)}
+                            style={styles.fileInput}
+                            accept=".pdf,.docx,.doc,.txt,.md,.rtf,.csv,.xlsx,.xls,.pptx,.ppt,.html,.htm,.json,.xml,.yaml,.yml,.mp3,.wav,.m4a,.flac,.ogg,.webm,.aac,.png,.jpg,.jpeg,.bmp,.gif,.tiff"
+                        />
+                        <small style={{ color: '#888', marginTop: '0.5rem', display: 'block' }}>
+                            Supported: Documents (PDF, DOCX, TXT, MD), Spreadsheets (CSV, XLSX), Audio (MP3, WAV), Images (PNG, JPG), and more
+                        </small>
                         <button type="submit" style={styles.buttonPrimary} disabled={isUploading}>
                             {isUploading ? <><Loader2 style={styles.spinner} size={16} /> Uploading...</> : 'Upload Files'}
                         </button>

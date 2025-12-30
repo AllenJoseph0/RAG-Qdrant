@@ -8,6 +8,39 @@ import requests
 
 API_BASE_URL = "http://localhost:8351"  # Backend.js (Node.js proxy)
 
+# Supported file types for RAG indexing (from backend ai_server.py)
+SUPPORTED_EXTENSIONS = {
+    # Documents
+    '.pdf', '.docx', '.doc', '.txt', '.md', '.rtf',
+    # Spreadsheets
+    '.csv', '.xlsx', '.xls',
+    # Presentations
+    '.pptx', '.ppt',
+    # Web
+    '.html', '.htm',
+    # Data formats
+    '.json', '.xml', '.yaml', '.yml',
+    # Audio (transcribed via Whisper)
+    '.mp3', '.wav', '.m4a', '.flac', '.ogg', '.webm', '.aac',
+    # Images (processed via vision models)
+    '.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tiff'
+}
+
+UNSUPPORTED_MESSAGE = """
+⚠️ **Unsupported File Type**
+
+Only the following file types are supported for RAG indexing:
+- **Documents**: PDF, DOCX, DOC, TXT, MD, RTF
+- **Spreadsheets**: CSV, XLSX, XLS
+- **Presentations**: PPTX, PPT  
+- **Web**: HTML, HTM
+- **Data**: JSON, XML, YAML, YML
+- **Audio**: MP3, WAV, M4A, FLAC, OGG, WEBM, AAC
+- **Images**: PNG, JPG, JPEG, BMP, GIF, TIFF
+
+**Not supported**: ZIP, RAR, video files (MP4, AVI, MOV, etc.), executables
+"""
+
 # Page Configuration
 st.set_page_config(
     page_title="File Upload MCP Tester",
@@ -186,6 +219,17 @@ if 'tools' in st.session_state:
             with col2:
                 st.markdown("### Upload Preview")
                 if uploaded_file:
+                    # Check file extension
+                    import os
+                    file_ext = os.path.splitext(uploaded_file.name)[1].lower()
+                    is_supported = file_ext in SUPPORTED_EXTENSIONS
+                    
+                    if not is_supported:
+                        st.error(f"❌ Unsupported file type: `{file_ext}`")
+                        st.warning(UNSUPPORTED_MESSAGE)
+                    else:
+                        st.success(f"✅ Supported file type: `{file_ext}`")
+                    
                     st.info(f"**File:** {uploaded_file.name}")
                     st.info(f"**Size:** {uploaded_file.size:,} bytes")
                     st.info(f"**Type:** {uploaded_file.type or 'Unknown'}")
@@ -202,70 +246,84 @@ if 'tools' in st.session_state:
             st.markdown("---")
             
             # Upload button
-            if st.button("🚀 Upload to RAG", type="primary", disabled=not uploaded_file or not selected_category):
+            # Check if file is supported before enabling upload
+            upload_disabled = not uploaded_file or not selected_category
+            if uploaded_file:
+                import os
+                file_ext = os.path.splitext(uploaded_file.name)[1].lower()
+                upload_disabled = upload_disabled or (file_ext not in SUPPORTED_EXTENSIONS)
+            
+            if st.button("🚀 Upload to RAG", type="primary", disabled=upload_disabled):
                 if not uploaded_file:
                     st.error("Please select a file to upload")
                 elif not selected_category:
                     st.error("Please specify a category")
                 else:
-                    with st.spinner(f"Uploading {uploaded_file.name}..."):
-                        try:
-                            # Read and encode file
-                            file_bytes = uploaded_file.read()
-                            file_b64 = base64.b64encode(file_bytes).decode('utf-8')
-                            
-                            # Prepare arguments
-                            arguments = {
-                                "firm_id": str(default_firm_id),
-                                "category": selected_category,
-                                "file_name": uploaded_file.name,
-                                "file_content": file_b64,
-                                "update_index": update_index
-                            }
-                            
-                            if file_description.strip():
-                                arguments["description"] = file_description.strip()
-                            
-                            # Call MCP tool
-                            result = asyncio.run(call_upload_tool(server_url, arguments))
-                            
-                            st.subheader("📊 Upload Result")
-                            
-                            if isinstance(result, str) and result.startswith("Error"):
-                                st.error(result)
-                            else:
-                                # Parse MCP Result content
-                                if hasattr(result, 'content') and isinstance(result.content, list):
-                                    for content in result.content:
-                                        if content.type == 'text':
-                                            # Check for success/error indicators
-                                            if "✅" in content.text or "successfully" in content.text.lower():
-                                                st.success(content.text)
-                                                
-                                                # Show additional info box
-                                                st.info(f"""
-                                                **Upload Summary:**
-                                                - 📁 File: `{uploaded_file.name}`
-                                                - 📂 Category: `{selected_category}`
-                                                - 🏢 Firm ID: `{default_firm_id}`
-                                                - 📍 Path: `backend/data/uploads/{default_firm_id}/{selected_category}/{uploaded_file.name}`
-                                                - 🔄 Index Updated: `{update_index}`
-                                                """)
-                                            elif "❌" in content.text or "failed" in content.text.lower():
-                                                st.error(content.text)
-                                            else:
-                                                st.info(content.text)
-                                        elif content.type == 'image':
-                                            st.image(content.data)
-                                        elif content.type == 'resource':
-                                            st.code(content.text)
+                    # Final file type check
+                    import os
+                    file_ext = os.path.splitext(uploaded_file.name)[1].lower()
+                    if file_ext not in SUPPORTED_EXTENSIONS:
+                        st.error(f"Cannot upload unsupported file type: {file_ext}")
+                        st.warning(UNSUPPORTED_MESSAGE)
+                    else:
+                        with st.spinner(f"Uploading {uploaded_file.name}..."):
+                            try:
+                                # Read and encode file
+                                file_bytes = uploaded_file.read()
+                                file_b64 = base64.b64encode(file_bytes).decode('utf-8')
+                                
+                                # Prepare arguments
+                                arguments = {
+                                    "firm_id": str(default_firm_id),
+                                    "category": selected_category,
+                                    "file_name": uploaded_file.name,
+                                    "file_content": file_b64,
+                                    "update_index": update_index
+                                }
+                                
+                                if file_description.strip():
+                                    arguments["description"] = file_description.strip()
+                                
+                                # Call MCP tool
+                                result = asyncio.run(call_upload_tool(server_url, arguments))
+                                
+                                st.subheader("📊 Upload Result")
+                                
+                                if isinstance(result, str) and result.startswith("Error"):
+                                    st.error(result)
                                 else:
-                                    st.json(result)
-                                    
-                        except Exception as e:
-                            st.error(f"Upload failed: {str(e)}")
-                            with st.expander("Error Details"):
-                                st.exception(e)
+                                    # Parse MCP Result content
+                                    if hasattr(result, 'content') and isinstance(result.content, list):
+                                        for content in result.content:
+                                            if content.type == 'text':
+                                                # Check for success/error indicators
+                                                if "✅" in content.text or "successfully" in content.text.lower():
+                                                    st.success(content.text)
+                                                    
+                                                    # Show additional info box
+                                                    st.info(f"""
+                                                    **Upload Summary:**
+                                                    - 📁 File: `{uploaded_file.name}`
+                                                    - 📂 Category: `{selected_category}`
+                                                    - 🏢 Firm ID: `{default_firm_id}`
+                                                    - 📍 Path: `backend/data/uploads/{default_firm_id}/{selected_category}/{uploaded_file.name}`
+                                                    - 🔄 Index Updated: `{update_index}`
+                                                    """)
+                                                elif "❌" in content.text or "failed" in content.text.lower():
+                                                    st.error(content.text)
+                                                else:
+                                                    st.info(content.text)
+                                            elif content.type == 'image':
+                                                st.image(content.data)
+                                            elif content.type == 'resource':
+                                                st.code(content.text)
+                                    else:
+                                        st.json(result)
+                                        
+                            except Exception as e:
+                                st.error(f"Upload failed: {str(e)}")
+                                with st.expander("Error Details"):
+                                    st.exception(e)
 
 else:
     st.info("Click 'Connect & List Tools' to discover the File Upload tool.")
