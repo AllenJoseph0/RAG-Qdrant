@@ -829,6 +829,7 @@ app.post('/api/sql_agent/sync', proxyToAiServer('api/sql_agent_rag/sync', 'post'
 app.get('/api/sql_agent/sync_status', proxyToAiServer('api/sql_agent_rag/status', 'get'));
 app.post('/api/sql_agent/execute', proxyToAiServer('api/sql_agent/execute', 'post'));
 app.post('/api/sql_agent/ask', proxyToAiServer('api/sql_agent/ask', 'post'));
+app.get('/api/sql_agent/tables', proxyToAiServer('api/sql_agent/tables', 'get'));
 
 
 // ============================================================================

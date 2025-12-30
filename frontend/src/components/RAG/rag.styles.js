@@ -233,6 +233,48 @@ const styles = {
         transition: 'all 0.2s',
         color: 'var(--primary)',
         boxShadow: '0 0 0 3px var(--primary-light)',
+    },
+    // Autocomplete dropdown styles
+    autocompleteDropdown: {
+        position: 'absolute',
+        bottom: '100%',
+        left: 0,
+        right: 0,
+        marginBottom: '0.5rem',
+        background: 'var(--card)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius-lg)',
+        boxShadow: 'var(--shadow-lg)',
+        maxHeight: '300px',
+        overflowY: 'auto',
+        zIndex: 1000,
+    },
+    autocompleteHeader: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.5rem',
+        padding: '0.75rem 1rem',
+        background: 'var(--secondary)',
+        borderBottom: '1px solid var(--border)',
+        fontWeight: 600,
+        fontSize: '0.85rem',
+        color: 'var(--muted-foreground)',
+        position: 'sticky',
+        top: 0,
+        zIndex: 1,
+    },
+    autocompleteItem: {
+        padding: '0.75rem 1rem',
+        cursor: 'pointer',
+        transition: 'background-color 0.15s',
+        borderBottom: '1px solid var(--border)',
+        fontFamily: 'monospace',
+        fontSize: '0.9rem',
+    },
+    autocompleteItemSelected: {
+        background: 'var(--primary-light)',
+        color: 'var(--primary)',
+        fontWeight: 600,
     }
 };
 

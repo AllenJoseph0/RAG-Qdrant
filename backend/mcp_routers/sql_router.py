@@ -160,3 +160,24 @@ def sync_schema_endpoint():
         return jsonify({"success": True, "message": "Schema synced to vector store."})
     else:
         return jsonify({"success": False, "error": "Failed to sync schema."}), 500
+
+@sql_bp.route('/tables', methods=['GET'])
+def get_tables():
+    """Get all table names for autocomplete"""
+    firm_id = request.args.get('firm_id')
+    
+    if not firm_id:
+        return jsonify({"error": "firm_id required"}), 400
+    
+    db_name = request.args.get('db_name')
+    db_config = get_db_connection_config(firm_id, db_name=db_name)
+    if not db_config:
+        return jsonify({"success": False, "tables": [], "message": "Database not configured"}), 200
+    
+    from .sql_service import get_all_tables
+    tables_info = get_all_tables(db_config)
+    
+    # Extract just the table names for autocomplete
+    table_names = [t['table_name'] for t in tables_info if t.get('table_name')]
+    
+    return jsonify({"success": True, "tables": table_names})

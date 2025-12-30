@@ -6,7 +6,7 @@ from mcp.client.sse import sse_client
 from mcp.client.session import ClientSession
 import requests
 
-API_BASE_URL = "http://localhost:8351"  # Backend.js (Node.js proxy)
+API_BASE_URL = "http://61.2.142.91:8351"  # Backend.js (Node.js proxy)
 
 # Supported file types for RAG indexing (from backend ai_server.py)
 SUPPORTED_EXTENSIONS = {
@@ -56,7 +56,7 @@ This utility connects to the **File Upload MCP Server** via SSE to test file upl
 # --- SIDEBAR CONFIGURATION ---
 with st.sidebar:
     st.header("🔌 Connection Settings")
-    server_url = st.text_input("MCP Server URL", value="http://localhost:8352/mcp/file/sse")
+    server_url = st.text_input("MCP Server URL", value="http://61.2.142.91:8352/mcp/file/sse")
     
     st.header("👤 Context Defaults")
     st.info("Default values for file uploads.")

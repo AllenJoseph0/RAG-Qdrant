@@ -851,7 +851,78 @@ const QueryInterface = ({ currentUser, owner, category, selectedCategory, person
 
 const ChatInput = ({ status, onSubmit, onVoiceClick, onStop, isSqlMode, onToggleSqlMode }) => {
     const [query, setQuery] = useState('');
+    const [tables, setTables] = useState([]);
+    const [filteredTables, setFilteredTables] = useState([]);
+    const [showSuggestions, setShowSuggestions] = useState(false);
+    const [selectedIndex, setSelectedIndex] = useState(-1);
     const textareaRef = useRef(null);
+    const suggestionsRef = useRef(null);
+    const firmid = Cookies.get('firmid');
+
+    // Fetch table names when SQL mode is enabled
+    useEffect(() => {
+        if (isSqlMode && firmid) {
+            const fetchTables = async () => {
+                try {
+                    console.log('Fetching tables for firm_id:', firmid);
+                    const res = await axios.get(`${RAG_BACKEND_URL}/api/sql_agent/tables?firm_id=${firmid}`);
+                    console.log('Tables response:', res.data);
+                    if (res.data.success && res.data.tables) {
+                        setTables(res.data.tables);
+                        console.log('Loaded tables:', res.data.tables);
+                    }
+                } catch (err) {
+                    console.error('Failed to fetch table names:', err);
+                }
+            };
+            fetchTables();
+        } else {
+            console.log('Not fetching tables - isSqlMode:', isSqlMode, 'firmid:', firmid);
+        }
+    }, [isSqlMode, firmid]);
+
+    // Filter tables based on current input
+    useEffect(() => {
+        console.log('Filter effect - isSqlMode:', isSqlMode, 'query:', query, 'tables:', tables.length);
+
+        if (!isSqlMode) {
+            setFilteredTables([]);
+            setShowSuggestions(false);
+            return;
+        }
+
+        // If no query or only whitespace, show all tables
+        if (!query.trim()) {
+            if (tables.length > 0) {
+                setFilteredTables(tables.slice(0, 10));
+                setShowSuggestions(true);
+                console.log('Showing all tables (no query)');
+            } else {
+                setFilteredTables([]);
+                setShowSuggestions(false);
+            }
+            return;
+        }
+
+        // Get the word being typed (last word in the query)
+        const words = query.split(/\s+/);
+        const currentWord = words[words.length - 1].toLowerCase();
+
+        if (currentWord.length > 0) {
+            const matches = tables.filter(table =>
+                table.toLowerCase().includes(currentWord)
+            ).slice(0, 10); // Limit to 10 suggestions
+
+            console.log('Filtered matches for "' + currentWord + '":', matches);
+            setFilteredTables(matches);
+            setShowSuggestions(matches.length > 0);
+            setSelectedIndex(-1);
+        } else {
+            // Show all tables if current word is empty (e.g., after a space)
+            setFilteredTables(tables.slice(0, 10));
+            setShowSuggestions(tables.length > 0);
+        }
+    }, [query, tables, isSqlMode]);
 
     useEffect(() => {
         const el = textareaRef.current;
@@ -861,10 +932,48 @@ const ChatInput = ({ status, onSubmit, onVoiceClick, onStop, isSqlMode, onToggle
         }
     }, [query]);
 
+    const insertTableName = (tableName) => {
+        const words = query.split(/\s+/);
+        words[words.length - 1] = tableName;
+        const newQuery = words.join(' ') + ' ';
+        setQuery(newQuery);
+        setShowSuggestions(false);
+        setSelectedIndex(-1);
+        textareaRef.current?.focus();
+    };
+
     const submitText = () => {
         if (!query.trim() || status !== 'idle') return;
         onSubmit(query);
         setQuery('');
+        setShowSuggestions(false);
+    };
+
+    const handleKeyDown = (e) => {
+        if (showSuggestions && filteredTables.length > 0) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setSelectedIndex(prev =>
+                    prev < filteredTables.length - 1 ? prev + 1 : prev
+                );
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setSelectedIndex(prev => prev > 0 ? prev - 1 : -1);
+            } else if (e.key === 'Enter' && selectedIndex >= 0) {
+                e.preventDefault();
+                insertTableName(filteredTables[selectedIndex]);
+                return;
+            } else if (e.key === 'Escape') {
+                setShowSuggestions(false);
+                setSelectedIndex(-1);
+                return;
+            }
+        }
+
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            submitText();
+        }
     };
 
     const renderButton = () => {
@@ -878,32 +987,98 @@ const ChatInput = ({ status, onSubmit, onVoiceClick, onStop, isSqlMode, onToggle
     };
 
     return (
-        <div style={styles.inputWrapper}>
-            <button
-                onClick={onToggleSqlMode}
-                style={{
-                    ...styles.iconButton,
-                    marginRight: '0.5rem',
-                    color: isSqlMode ? 'var(--primary)' : 'var(--muted-foreground)',
-                    backgroundColor: isSqlMode ? 'rgba(var(--primary-rgb), 0.1)' : 'transparent'
-                }}
-                title={isSqlMode ? "Disable SQL Agent" : "Enable SQL Agent"}
-            >
-                <Database size={20} />
-            </button>
-            <textarea
-                ref={textareaRef}
-                value={query}
-                onChange={e => setQuery(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitText(); } }}
-                style={styles.chatInput}
-                placeholder="Ask a question..."
-                disabled={status === 'thinking'}
-                rows={1}
-            />
-            {renderButton()}
+        <div style={{ position: 'relative' }}>
+            <div style={styles.inputWrapper}>
+                <button
+                    onClick={onToggleSqlMode}
+                    style={{
+                        ...styles.iconButton,
+                        marginRight: '0.5rem',
+                        color: isSqlMode ? 'var(--primary)' : 'var(--muted-foreground)',
+                        backgroundColor: isSqlMode ? 'rgba(var(--primary-rgb), 0.1)' : 'transparent',
+                        position: 'relative'
+                    }}
+                    title={isSqlMode ? `SQL Agent (${tables.length} tables loaded)` : "Enable SQL Agent"}
+                >
+                    <Database size={20} />
+                    {isSqlMode && tables.length > 0 && (
+                        <span style={{
+                            position: 'absolute',
+                            top: '-4px',
+                            right: '-4px',
+                            background: 'var(--primary)',
+                            color: 'white',
+                            borderRadius: '50%',
+                            width: '16px',
+                            height: '16px',
+                            fontSize: '10px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontWeight: 'bold'
+                        }}>
+                            {tables.length}
+                        </span>
+                    )}
+                </button>
+                {isSqlMode && tables.length > 0 && (
+                    <button
+                        onClick={() => {
+                            setFilteredTables(tables.slice(0, 10));
+                            setShowSuggestions(true);
+                        }}
+                        style={{
+                            ...styles.iconButton,
+                            marginRight: '0.5rem',
+                            fontSize: '11px',
+                            padding: '0.3rem 0.6rem',
+                            borderRadius: '12px',
+                            background: 'var(--secondary)',
+                            border: '1px solid var(--border)'
+                        }}
+                        title="Show all tables"
+                    >
+                        Show Tables
+                    </button>
+                )}
+                <textarea
+                    ref={textareaRef}
+                    value={query}
+                    onChange={e => setQuery(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    style={styles.chatInput}
+                    placeholder={isSqlMode ? "Ask a question or start typing table names..." : "Ask a question..."}
+                    disabled={status === 'thinking'}
+                    rows={1}
+                />
+                {renderButton()}
+            </div>
+
+            {/* Autocomplete Suggestions Dropdown */}
+            {showSuggestions && filteredTables.length > 0 && (
+                <div ref={suggestionsRef} style={styles.autocompleteDropdown}>
+                    <div style={styles.autocompleteHeader}>
+                        <Database size={14} />
+                        <span>Available Tables</span>
+                    </div>
+                    {filteredTables.map((table, index) => (
+                        <div
+                            key={table}
+                            style={{
+                                ...styles.autocompleteItem,
+                                ...(index === selectedIndex ? styles.autocompleteItemSelected : {})
+                            }}
+                            onClick={() => insertTableName(table)}
+                            onMouseEnter={() => setSelectedIndex(index)}
+                        >
+                            {table}
+                        </div>
+                    ))}
+                </div>
+            )}
         </div>
     );
 };
+
 
 export default QueryView;
