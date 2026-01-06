@@ -5,7 +5,7 @@ export const isLocal =
 
 export const RAG_BACKEND_URL = isLocal
     ? 'http://192.168.18.15:8351'
-    : 'http://61.2.142.91:8351';
+    : 'http://192.168.18.15:8351';
 
 export function generateUUID() {
     var d = new Date().getTime();

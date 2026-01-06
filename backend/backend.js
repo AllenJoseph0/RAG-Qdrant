@@ -86,21 +86,7 @@ const dbPool = mysql.createPool({
   logger.error('MySQL Pool Error', { error: err.message });
 });
 
-// Database pool for the PMO database (pmo_prod)
-const pmoDbPool = mysql.createPool({
-  host: '88.150.227.111',
-  user: 'pmo_prod_111',
-  password: 'obiK^&(677',
-  database: 'pmo_prod',
-  port: 3306,
-  connectionLimit: 10,
-  waitForConnections: true,
-  queueLimit: 0,
-  multipleStatements: true,
-  charset: 'utf8mb4',
-}).on('error', (err) => {
-  logger.error('PMO DB Pool Error', { error: err.message });
-});
+
 
 
 // ============================================================================
@@ -320,7 +306,7 @@ app.post('/api/voice/stt', memoryUpload.single('audio'), async (req, res) => {
 app.post('/api/voice/tts', proxyToAiServer('voice/tts'));
 app.post('/api/voice/demo', proxyToAiServer('voice/demo'));
 app.post('/api/voice/greeting', proxyToAiServer('voice/greeting'));
-app.get('/api/voice/list-voices', proxyToAiServer('voice/list-voices', 'get'));
+
 app.get('/api/voice/list-google-voices', proxyToAiServer('voice/list-google-voices', 'get'));
 app.get('/api/voice/list-elevenlabs-voices', proxyToAiServer('voice/list-elevenlabs-voices', 'get'));
 app.get('/api/voice/list-deepgram-voices', proxyToAiServer('voice/list-deepgram-voices', 'get'));
@@ -666,7 +652,7 @@ app.get('/api/employees', async (req, res) => {
       params.push(excludeId);
     }
 
-    const [rows] = await pmoDbPool.query(sql, params);
+    const [rows] = await dbPool.query(sql, params);
     res.json(rows);
   } catch (e) {
     logger.error('Failed to fetch employees', { error: e.message });
@@ -1141,7 +1127,7 @@ app.get('/api/llm/options', async (req, res) => {
         // Allow users to add keys for LLMs and speech services
         options.providers = allProviders.filter(p => ['GROQ', 'GEMINI', 'GOOGLE_TTS', 'ELEVENLABS', 'DEEPGRAM'].includes(p));
       } else if (row.COLUMN_NAME === 'LLM_PROVIDER_TYPE') {
-        options.types = parseEnum(row.COLUMN_TYPE);
+        options.types = parseEnum(row.COLUMN_TYPE).filter(t => ['TEXT-TO-TEXT', 'TEXT-TO-SPEECH', 'SPEECH-TO-TEXT'].includes(t));
       }
     });
     res.json(options);

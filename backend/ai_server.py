@@ -12,7 +12,7 @@ import sys
 from logging.handlers import RotatingFileHandler
 from typing import List, Dict, Any, Optional, TypedDict
 from uuid import uuid4
-import subprocess
+
 import socket
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
@@ -56,7 +56,6 @@ import google.generativeai as genai
 from google.cloud import texttospeech
 import pymysql
 from elevenlabs.client import ElevenLabs
-from deepgram import DeepgramClient
 
 # SQL Agent Integration
 from mcp_routers import sql_bp
@@ -130,18 +129,9 @@ AUDIO_EXTENSIONS = [".mp3", ".wav", ".m4a", ".flac", ".ogg", ".webm", ".aac"]
 IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tiff"]
 
 # Piper
-DEFAULT_PIPER_PATH = os.path.join(BASE_DIR, "piper", "piper")
-PIPER_BIN = os.getenv("PIPER_BIN", DEFAULT_PIPER_PATH)
-PIPER_VOICES_JSON = os.getenv("PIPER_VOICES_JSON", "[]")
-PIPER_DEFAULT_CODE = os.getenv("PIPER_DEFAULT_CODE", "en-US")
-try:
-    PIPER_VOICES = json.loads(PIPER_VOICES_JSON) if PIPER_VOICES_JSON else []
-    for voice in PIPER_VOICES:
-        model_path = voice.get("model")
-        if model_path and not os.path.isabs(model_path):
-            voice["model"] = os.path.join(VOICES_MODELS_DIR, model_path)
-except Exception:
-    PIPER_VOICES = []
+
+# Validated non-piper voice configs
+PIPER_VOICES = []
 
 # Caches
 GOOGLE_VOICES_CACHE = {}
@@ -172,13 +162,7 @@ try:
     cross_encoder = HuggingFaceCrossEncoder(model_name=CROSS_ENCODER_MODEL_NAME)
     logger.info("Cross-encoder model initialized")
 
-    if not os.path.exists(PIPER_BIN):
-        logger.warning(f"Piper binary not found at '{PIPER_BIN}'. TTS endpoints will return 503.")
-    else:
-        missing = [v for v in PIPER_VOICES if not os.path.exists(v.get("model", ""))]
-        if missing:
-            logger.warning(f"Some Piper models are missing: {[m.get('code') for m in missing]}")
-    logger.info(f"Piper ready with {len(PIPER_VOICES)} configured voice(s)")
+    logger.info(f"Piper disabled. Ready with other providers.")
 
     # Inject shared components into SQL Service
     import mcp_routers.sql_service as sql_service
@@ -258,8 +242,6 @@ def get_llm(firm_id: int, preferred_provider: str = 'GROQ'):
         return ChatGroq(temperature=0.2, groq_api_key=api_key, model_name="llama-3.3-70b-versatile")
     elif preferred_provider == 'GEMINI':
         return ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key, temperature=0.2)
-    elif preferred_provider == 'OPENAI_GPT4':
-        return ChatOpenAI(model_name="gpt-4-turbo", openai_api_key=api_key, temperature=0.2)
 
     logger.warning(f"Preferred provider '{preferred_provider}' not supported. Falling back to Groq.")
     groq_api_key = get_api_key(firm_id, 'GROQ')
@@ -573,42 +555,7 @@ def _list_user_categories(username: str) -> List[str]:
     if not os.path.isdir(user_dir): return []
     return sorted([d for d in os.listdir(user_dir) if os.path.isdir(os.path.join(user_dir, d))])
 
-def _voices_index() -> Dict[str, Dict[str, Any]]:
-    return {v.get("code"): v for v in PIPER_VOICES if v.get("code") and v.get("model")}
 
-def _select_voice(code: Optional[str]) -> Optional[Dict[str, Any]]:
-    vmap = _voices_index()
-    if not vmap: return None
-    code = code or PIPER_DEFAULT_CODE
-    if code in vmap: return vmap[code]
-    if code and "-" in code:
-        base = code.split("-", 1)[0]
-        for k, v in vmap.items():
-            if k.startswith(base): return v
-    return vmap.get(PIPER_DEFAULT_CODE) or list(vmap.values())[0]
-
-def piper_tts_to_wav(text: str, voice: Dict[str, Any]) -> str:
-    if not os.path.exists(PIPER_BIN): raise RuntimeError("Piper binary not found")
-    model = voice.get("model")
-    if not model or not os.path.exists(model): raise RuntimeError(f"Piper model missing: {model}")
-
-    out_path = os.path.join(TEMP_FOLDER, f"tts_{uuid4().hex}.wav")
-    cmd = [PIPER_BIN, "--model", model, "--output_file", out_path]
-
-
-    if voice.get("speaker") is not None: cmd += ["--speaker", str(voice["speaker"])]
-    if voice.get("length_scale") is not None: cmd += ["--length_scale", str(voice["length_scale"])]
-    if voice.get("noise_scale") is not None: cmd += ["--noise_scale", str(voice["noise_scale"])]
-    if voice.get("noise_w") is not None: cmd += ["--noise_w", str(voice["noise_w"])]
-
-    env = os.environ.copy()
-    env.setdefault("OMP_NUM_THREADS", "2")
-    if "PIPER_VOICES_JSON" in env: del env["PIPER_VOICES_JSON"]
-
-    proc = subprocess.run(cmd, input=text.encode("utf-8"), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
-    if proc.returncode != 0 or not os.path.exists(out_path):
-        raise RuntimeError(f"Piper failed: {proc.stderr.decode('utf-8','ignore')}")
-    return out_path
     
 def google_tts_to_wav(text: str, language_code: str, voice_name: str, api_key: str) -> str:
     """Synthesizes speech from text using Google Cloud TTS and returns the path to a WAV file."""
@@ -667,25 +614,14 @@ def elevenlabs_tts_to_wav(text: str, voice_id: str, api_key: str) -> str:
 def deepgram_tts_to_wav(text: str, model_name: str, api_key: str) -> str:
     """Synthesizes speech using Deepgram and saves to a WAV file by calling the REST API directly."""
     try:
-        # The user selects a voice code (e.g., 'aura-luna-en'), which is passed as model_name.
         url = f"https://api.deepgram.com/v1/speak?model={model_name}&encoding=linear16&container=wav"
-        
-        headers = {
-            "Authorization": f"Token {api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "text": text
-        }
-
+        headers = {"Authorization": f"Token {api_key}", "Content-Type": "application/json"}
+        payload = {"text": text}
         response = requests.post(url, headers=headers, json=payload)
         response.raise_for_status()
-
         out_path = os.path.join(TEMP_FOLDER, f"tts_deepgram_{uuid4().hex}.wav")
         with open(out_path, "wb") as f:
             f.write(response.content)
-
         logger.info(f"Deepgram TTS audio content written to file {out_path}")
         return out_path
     except requests.exceptions.RequestException as e:
@@ -698,21 +634,39 @@ def deepgram_tts_to_wav(text: str, model_name: str, api_key: str) -> str:
         raise RuntimeError(f"Deepgram TTS failed: {e}")
 
 def deepgram_stt(audio_path: str, api_key: str) -> str:
-    """Transcribes audio using Deepgram."""
+    """Transcribes audio using Deepgram REST API directly."""
     try:
-        deepgram = DeepgramClient(api_key=api_key)
+        # Use REST API directly to avoid SDK version compatibility issues
+        url = "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&language=en"
+        headers = {
+            "Authorization": f"Token {api_key}",
+            "Content-Type": "application/octet-stream"
+        }
+        
         with open(audio_path, "rb") as file:
-            buffer_data = file.read()
+            audio_data = file.read()
+        
+        response = requests.post(url, headers=headers, data=audio_data)
+        response.raise_for_status()
+        
+        result = response.json()
+        
+        # Extract transcript from response
+        transcript = ""
+        if "results" in result and "channels" in result["results"]:
+            channels = result["results"]["channels"]
+            if channels and len(channels) > 0:
+                alternatives = channels[0].get("alternatives", [])
+                if alternatives and len(alternatives) > 0:
+                    transcript = alternatives[0].get("transcript", "")
+        
+        return transcript.strip()
 
-        payload = {
-            "buffer": buffer_data,
-        }
-        options = {
-            "model": "nova-2",
-            "smart_format": True,
-        }
-        response = deepgram.listen.prerecorded.v("1").transcribe_file(payload, options)
-        return response["results"]["channels"][0]["alternatives"][0]["transcript"]
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Deepgram STT API request failed: {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            logger.error(f"Deepgram API Response: {e.response.text}")
+        raise RuntimeError(f"Deepgram STT failed: API request error")
     except Exception as e:
         logger.error(f"Deepgram STT failed: {e}")
         raise RuntimeError(f"Deepgram STT failed: {e}")
@@ -1814,9 +1768,7 @@ def stt_endpoint():
             os.remove(in_path)
 
 
-@app.route("/voice/list-voices", methods=["GET"])
-def list_voices():
-    return jsonify([{"code": k, "name": v.get("name", k)} for k, v in _voices_index().items()])
+
 
 @app.route("/voice/list-google-voices", methods=["GET"])
 def list_google_voices():
@@ -1935,7 +1887,7 @@ def tts_endpoint():
     if not text:
         return jsonify({"error": "No text provided"}), 400
 
-    provider = data.get("provider", "piper").lower() # piper, google, elevenlabs, deepgram
+    provider = data.get("provider", "google").lower() # google, elevenlabs, deepgram
     firm_id = data.get("firm_id")
     voice_code = data.get("code") # Voice ID/Name for the provider
     language = data.get("language") # Language code, mainly for Google
@@ -1952,7 +1904,7 @@ def tts_endpoint():
         api_key_provider = provider_map.get(provider, provider.upper())
         api_key = get_api_key(firm_id, api_key_provider)
         
-        if provider != 'piper' and not api_key:
+        if not api_key:
              raise ValueError(f"{provider.capitalize()} API key is not configured for this firm.")
 
         if provider == 'elevenlabs':
@@ -1971,11 +1923,8 @@ def tts_endpoint():
             logger.info(f"Attempting TTS with Google Cloud, voice: {voice_code}")
             wav_path = google_tts_to_wav(text, language, voice_code, api_key)
 
-        else: # Fallback to Piper
-            logger.info(f"Using Piper TTS as primary or fallback, voice: {voice_code}")
-            voice = _select_voice(voice_code)
-            if not voice: return jsonify({"error": "No valid Piper voice configured"}), 503
-            wav_path = piper_tts_to_wav(text, voice)
+        else: 
+             return jsonify({"error": "No valid TTS provider selected"}), 400
         
         # Read the generated file into an in-memory buffer
         with open(wav_path, 'rb') as f:
@@ -2007,7 +1956,7 @@ def tts_greeting():
     persona_id = data.get("persona_id")
     firm_id = data.get("firmId")
     
-    provider = data.get("provider", "piper").lower()
+    provider = data.get("provider", "google").lower()
     code = data.get("code")
     language = data.get("language")
 
@@ -2065,7 +2014,7 @@ def tts_greeting():
         api_key_provider = provider_map.get(provider, provider.upper())
         api_key = get_api_key(firm_id, api_key_provider)
 
-        if provider != 'piper' and not api_key:
+        if not api_key:
              raise ValueError(f"{provider.capitalize()} API key is not configured for this firm.")
 
         if provider == 'elevenlabs':
@@ -2075,9 +2024,7 @@ def tts_greeting():
         elif provider == 'google':
             wav_path = google_tts_to_wav(text_to_speak, language, code, api_key)
         else:
-            voice = _select_voice(code)
-            if not voice: return jsonify({"error": "Voice not configured"}), 503
-            wav_path = piper_tts_to_wav(text_to_speak, voice)
+             return jsonify({"error": "No valid TTS provider selected"}), 400
         
         with open(wav_path, 'rb') as f:
             audio_buffer = io.BytesIO(f.read())
@@ -2102,7 +2049,7 @@ def tts_greeting():
 def tts_demo():
     data = request.json or {}
     firm_id = data.get("firmId")
-    provider = data.get("provider", "piper").lower()
+    provider = data.get("provider", "google").lower()
     code = data.get("code")
     language = data.get("language")
 
@@ -2156,7 +2103,7 @@ def tts_demo():
         api_key_provider = provider_map.get(provider, provider.upper())
         api_key = get_api_key(firm_id, api_key_provider)
 
-        if provider != 'piper' and not api_key:
+        if not api_key:
             raise ValueError(f"{provider.capitalize()} API key is not configured for this firm.")
 
         if provider == 'elevenlabs':
@@ -2166,9 +2113,7 @@ def tts_demo():
         elif provider == 'google':
             wav_path = google_tts_to_wav(text_to_speak, language, code, api_key)
         else:
-            voice = _select_voice(code)
-            if not voice: return jsonify({"error": "No voices configured"}), 503
-            wav_path = piper_tts_to_wav(text_to_speak, voice)
+            return jsonify({"error": "No valid TTS provider selected"}), 400
         
         with open(wav_path, 'rb') as f:
             audio_buffer = io.BytesIO(f.read())

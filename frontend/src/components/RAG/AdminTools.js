@@ -478,16 +478,49 @@ export const ApiKeyManager = ({ currentUser }) => {
                     <div style={styles.cardBody}>
                         <div style={styles.formGroup}>
                             <label style={styles.label}>Provider Type</label>
-                            <select style={styles.input} value={selectedProviderType} onChange={e => setSelectedProviderType(e.target.value)} required >
+                            <select
+                                style={styles.input}
+                                value={selectedProviderType}
+                                onChange={e => {
+                                    setSelectedProviderType(e.target.value);
+                                    setSelectedProvider(''); // Reset provider when type changes
+                                }}
+                                required
+                            >
                                 <option value="" disabled>Select a type...</option>
-                                {llmProviderTypes.map(type => <option key={type} value={type}>{type}</option>)}
+                                <option value="TEXT-TO-TEXT">TEXT-TO-TEXT</option>
+                                <option value="TEXT-TO-SPEECH">TEXT-TO-SPEECH</option>
+                                <option value="SPEECH-TO-TEXT">SPEECH-TO-TEXT</option>
                             </select>
                         </div>
                         <div style={styles.formGroup}>
                             <label style={styles.label}>Provider</label>
-                            <select style={styles.input} value={selectedProvider} onChange={e => setSelectedProvider(e.target.value)} required >
+                            <select
+                                style={styles.input}
+                                value={selectedProvider}
+                                onChange={e => setSelectedProvider(e.target.value)}
+                                required
+                                disabled={!selectedProviderType}
+                            >
                                 <option value="" disabled>Select a provider...</option>
-                                {llmProviders.map(provider => <option key={provider} value={provider}>{provider}</option>)}
+                                {selectedProviderType === 'TEXT-TO-TEXT' && (
+                                    <>
+                                        <option value="GROQ">GROQ</option>
+                                        <option value="GEMINI">GEMINI</option>
+                                    </>
+                                )}
+                                {selectedProviderType === 'TEXT-TO-SPEECH' && (
+                                    <>
+                                        <option value="DEEPGRAM">DEEPGRAM</option>
+                                        <option value="ELEVENLABS">ELEVEN LABS</option>
+                                        <option value="GOOGLE_TTS">GOOGLE TTS</option>
+                                    </>
+                                )}
+                                {selectedProviderType === 'SPEECH-TO-TEXT' && (
+                                    <>
+                                        <option value="DEEPGRAM">DEEPGRAM</option>
+                                    </>
+                                )}
                             </select>
                         </div>
                         <div style={styles.formGroup}>

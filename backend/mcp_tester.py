@@ -23,7 +23,7 @@ to list available agents and test tool execution.
 # --- SIDEBAR CONFIGURATION ---
 with st.sidebar:
     st.header("🔌 Connection Settings")
-    server_url = st.text_input("MCP Server URL", value="http://localhost:8352/sse")
+    server_url = st.text_input("MCP Server URL", value="http://localhost:8352/mcp/sql/sse")
     
     st.header("👤 Context Defaults")
     st.info("Default values for common parameters.")
@@ -134,6 +134,42 @@ with st.sidebar:
                         st.error(f"Sync Failed: {resp.text}")
                 except Exception as e:
                     st.error(f"Sync Request failed: {e}")
+        
+        st.divider()
+        
+        # Test Table Listing
+        st.subheader("📋 Test Table Listing")
+        db_to_list = st.selectbox("Select Database to List Tables", [cfg.get('database', 'Unknown') for cfg in all_configs], key="db_list_select")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("📊 List Tables (REST API)", use_container_width=True):
+                with st.spinner(f"Fetching tables from {db_to_list}..."):
+                    try:
+                        params = {
+                            "firm_id": str(default_firm_id),
+                            "db_name": db_to_list
+                        }
+                        resp = requests.get(f"{API_BASE_URL}/api/sql_agent/tables", params=params)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            if data.get('success') and data.get('tables'):
+                                tables = data['tables']
+                                st.success(f"✅ Found {len(tables)} tables")
+                                with st.expander(f"View All Tables ({len(tables)})", expanded=True):
+                                    for idx, table in enumerate(tables, 1):
+                                        st.markdown(f"{idx}. `{table}`")
+                            else:
+                                st.warning("No tables found or database not configured")
+                        else:
+                            st.error(f"Failed: {resp.text}")
+                    except Exception as e:
+                        st.error(f"Request failed: {e}")
+        
+        with col2:
+            if st.button("🔧 List Tables (MCP Tool)", use_container_width=True):
+                st.info("Use the 'list_tables' tool in the main interface below to test via MCP")
+
 
 # --- ASYNC HELPERS ---
 async def list_available_tools(url):

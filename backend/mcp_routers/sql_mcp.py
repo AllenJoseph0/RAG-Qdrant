@@ -24,14 +24,27 @@ except ImportError:
 
 # Import service functions
 try:
-    from mcp_routers.sql_service import generate_sql_query, execute_generated_sql
+    from mcp_routers.sql_service import (
+        generate_sql_query, 
+        execute_generated_sql, 
+        get_all_tables,
+        get_db_connection_config
+    )
 except ImportError:
     try:
-        from sql_service import generate_sql_query, execute_generated_sql
+        from sql_service import (
+            generate_sql_query, 
+            execute_generated_sql,
+            get_all_tables,
+            get_db_connection_config
+        )
     except ImportError as e:
         # Define mock/error functions if imports fail (e.g. strict environment)
         def generate_sql_query(*args, **kwargs): return {"success": False, "error": str(e)}
         def execute_generated_sql(*args, **kwargs): return {"success": False, "error": str(e)}
+        def get_all_tables(*args, **kwargs): return []
+        def get_db_connection_config(*args, **kwargs): return None
+
 
 # Configure Logging
 logger = logging.getLogger(__name__)
@@ -72,47 +85,98 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["question", "firm_id"]
             }
+        ),
+        Tool(
+            name="list_tables",
+            description="Get a list of all available table names in the database for the specified firm.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "firm_id": {
+                        "type": "string",
+                        "description": "The ID of the firm whose database tables to list."
+                    },
+                    "db_name": {
+                        "type": "string",
+                        "description": "Optional: Specific database name (if firm has multiple databases)."
+                    }
+                },
+                "required": ["firm_id"]
+            }
         )
     ]
 
 @mcp_server.call_tool()
 async def call_tool(name: str, arguments: Any) -> list[types.TextContent | types.ImageContent | types.EmbeddedResource]:
-    if name != "query_db":
+    if name == "query_db":
+        if not isinstance(arguments, dict):
+            raise ValueError("Arguments must be a dictionary")
+
+        question = arguments.get("question")
+        firm_id = arguments.get("firm_id")
+        user_id = arguments.get("user_id")
+        db_name = arguments.get("db_name")  # Optional
+        
+        if not question or not firm_id:
+            return [TextContent(type="text", text="Error: Missing 'question' or 'firm_id'")]
+
+        # Normalize user_id
+        try:
+            if user_id:
+                user_id = int(str(user_id))
+        except ValueError:
+            pass
+
+        logger.info(f"Executing query_db: {question} (Firm: {firm_id}, DB: {db_name or 'default'})")
+        
+        # 1. Generate SQL
+        gen_result = generate_sql_query(question, firm_id, user_id=user_id, db_name=db_name)
+        if not gen_result['success']:
+            return [TextContent(type="text", text=f"Error Generating SQL: {gen_result.get('error')}")]
+        
+        sql = gen_result['sql']
+        print("--------------------------------------------------")
+        print(f"Generated SQL: {sql}")
+        print("--------------------------------------------------")
+        
+        # Return ONLY the SQL as requested
+        output_text = f"Generated SQL:\n{sql}"
+        return [TextContent(type="text", text=output_text)]
+    
+    elif name == "list_tables":
+        if not isinstance(arguments, dict):
+            raise ValueError("Arguments must be a dictionary")
+        
+        firm_id = arguments.get("firm_id")
+        db_name = arguments.get("db_name")  # Optional
+        
+        if not firm_id:
+            return [TextContent(type="text", text="Error: Missing 'firm_id'")]
+        
+        logger.info(f"Executing list_tables for Firm: {firm_id}, DB: {db_name or 'default'}")
+        
+        # Get database configuration
+        db_config = get_db_connection_config(firm_id, db_name=db_name)
+        if not db_config:
+            return [TextContent(type="text", text=f"Error: No database configured for firm {firm_id}")]
+        
+        # Get all tables
+        try:
+            tables_info = get_all_tables(db_config)
+            table_names = [t['table_name'] for t in tables_info if t.get('table_name')]
+            
+            if not table_names:
+                return [TextContent(type="text", text="No tables found in the database.")]
+            
+            # Format output
+            output_text = f"Available tables ({len(table_names)}):\n" + "\n".join(f"- {name}" for name in table_names)
+            return [TextContent(type="text", text=output_text)]
+        except Exception as e:
+            logger.error(f"Error fetching tables: {e}")
+            return [TextContent(type="text", text=f"Error fetching tables: {str(e)}")]
+    
+    else:
         raise ValueError(f"Unknown tool: {name}")
-
-    if not isinstance(arguments, dict):
-        raise ValueError("Arguments must be a dictionary")
-
-    question = arguments.get("question")
-    firm_id = arguments.get("firm_id")
-    user_id = arguments.get("user_id")
-    db_name = arguments.get("db_name")  # Optional
-    
-    if not question or not firm_id:
-        return [TextContent(type="text", text="Error: Missing 'question' or 'firm_id'")]
-
-    # Normalize user_id
-    try:
-        if user_id:
-            user_id = int(str(user_id))
-    except ValueError:
-        pass
-
-    logger.info(f"Executing query_db: {question} (Firm: {firm_id}, DB: {db_name or 'default'})")
-    
-    # 1. Generate SQL
-    gen_result = generate_sql_query(question, firm_id, user_id=user_id, db_name=db_name)
-    if not gen_result['success']:
-        return [TextContent(type="text", text=f"Error Generating SQL: {gen_result.get('error')}")]
-    
-    sql = gen_result['sql']
-    print("--------------------------------------------------")
-    print(f"Generated SQL: {sql}")
-    print("--------------------------------------------------")
-    
-    # Return ONLY the SQL as requested
-    output_text = f"Generated SQL:\n{sql}"
-    return [TextContent(type="text", text=output_text)]
 
 # --- SSE Transport Bridge for Flask ---
 
@@ -147,7 +211,8 @@ def handle_sse_connect():
     def generate():
         # First event: endpoint for messages
         # The client expects an 'endpoint' event telling it where to POST messages
-        endpoint_url = f"/messages?session_id={session_id}"
+        # Include the blueprint prefix in the URL
+        endpoint_url = f"/mcp/sql/messages?session_id={session_id}"
         yield f"event: endpoint\ndata: {endpoint_url}\n\n"
         
         # Keep connection open and yield messages

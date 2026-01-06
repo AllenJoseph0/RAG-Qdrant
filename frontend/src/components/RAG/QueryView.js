@@ -152,7 +152,7 @@ const VoiceSettingsModal = ({
     };
 
     const availableTtsProviders = useMemo(() => {
-        const providers = [{ id: 'piper', name: 'Standard (Piper)' }];
+        const providers = [];
         if (apiKeys.google) providers.push({ id: 'google', name: 'Google Cloud' });
         if (apiKeys.elevenlabs) providers.push({ id: 'elevenlabs', name: 'ElevenLabs' });
         if (apiKeys.deepgram) providers.push({ id: 'deepgram', name: 'Deepgram' });
@@ -186,20 +186,6 @@ const VoiceSettingsModal = ({
                 </div>
                 <div style={styles.modalBody}>
                     <div style={styles.voiceSettingsSection}>
-                        <h3 style={styles.voiceSettingsHeader}>Text-to-Speech (TTS) Provider</h3>
-                        <div style={styles.providerToggleContainer}>
-                            {availableTtsProviders.map(p => (
-                                <button
-                                    key={p.id}
-                                    onClick={() => setTtsProvider(p.id)}
-                                    style={ttsProvider === p.id ? styles.providerButtonActive : styles.providerButton}
-                                >
-                                    {p.name}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                    <div style={styles.voiceSettingsSection}>
                         <h3 style={styles.voiceSettingsHeader}>Speech-to-Text (STT) Provider</h3>
                         <div style={styles.providerToggleContainer}>
                             {availableSttProviders.map(p => (
@@ -207,6 +193,21 @@ const VoiceSettingsModal = ({
                                     key={p.id}
                                     onClick={() => setSttProvider(p.id)}
                                     style={sttProvider === p.id ? styles.providerButtonActive : styles.providerButton}
+                                >
+                                    {p.name}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div style={{ ...styles.voiceSettingsSection, marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border)' }}>
+                        <h3 style={styles.voiceSettingsHeader}>Text-to-Speech (TTS) Provider</h3>
+                        <div style={styles.providerToggleContainer}>
+                            {availableTtsProviders.map(p => (
+                                <button
+                                    key={p.id}
+                                    onClick={() => setTtsProvider(p.id)}
+                                    style={ttsProvider === p.id ? styles.providerButtonActive : styles.providerButton}
                                 >
                                     {p.name}
                                 </button>
@@ -283,11 +284,11 @@ const QueryInterface = ({ currentUser, owner, category, selectedCategory, person
     const [error, setError] = useState('');
 
     // Voice settings state
-    const [allVoices, setAllVoices] = useState({ piper: [], google: [], elevenlabs: [], deepgram: [] });
+    const [allVoices, setAllVoices] = useState({ google: [], elevenlabs: [], deepgram: [] });
     const [apiKeys, setApiKeys] = useState({ google: null, elevenlabs: null, deepgram: null });
-    const [ttsProvider, setTtsProvider] = useState(localStorage.getItem('RAG_TTS_PROVIDER') || 'piper');
+    const [ttsProvider, setTtsProvider] = useState(localStorage.getItem('RAG_TTS_PROVIDER') || 'google');
     const [sttProvider, setSttProvider] = useState(localStorage.getItem('RAG_STT_PROVIDER') || 'whisper');
-    const [selectedVoiceCode, setSelectedVoiceCode] = useState(localStorage.getItem('RAG_USER_VOICE_PREFERENCE') || 'en_GB-alan-medium');
+    const [selectedVoiceCode, setSelectedVoiceCode] = useState(localStorage.getItem('RAG_USER_VOICE_PREFERENCE') || 'en-US-Journey-F');
 
     const sessionIdRef = useRef(`${currentUser.id}-${currentUser.role}-${category}`);
     const audioPlayerRef = useRef(null);
@@ -324,24 +325,30 @@ const QueryInterface = ({ currentUser, owner, category, selectedCategory, person
         fetchKeys();
     }, [currentUser, firmid]);
 
+    // Auto-select valid TTS provider
+    useEffect(() => {
+        const available = [];
+        if (apiKeys.google) available.push('google');
+        if (apiKeys.elevenlabs) available.push('elevenlabs');
+        if (apiKeys.deepgram) available.push('deepgram');
+
+        if (available.length > 0 && !available.includes(ttsProvider)) {
+            console.log(`Current TTS provider '${ttsProvider}' not available. Switching to '${available[0]}'.`);
+            setTtsProvider(available[0]);
+        }
+    }, [apiKeys, ttsProvider]);
+
     // Fetch voices for all providers
     useEffect(() => {
         const fetchAllVoices = async () => {
             const endpoints = {
-                piper: '/api/voice/list-voices',
                 google: `/api/voice/list-google-voices?firm_id=${firmid}`,
                 elevenlabs: `/api/voice/list-elevenlabs-voices?firm_id=${firmid}`,
                 deepgram: '/api/voice/list-deepgram-voices'
             };
 
-            const newVoices = { piper: [], google: [], elevenlabs: [], deepgram: [] };
+            const newVoices = { google: [], elevenlabs: [], deepgram: [] };
 
-            if (endpoints.piper) {
-                try {
-                    const res = await axios.get(`${RAG_BACKEND_URL}${endpoints.piper}`);
-                    newVoices.piper = res.data || [];
-                } catch (e) { console.error('Failed to fetch Piper voices', e); }
-            }
             if (apiKeys.google) {
                 try {
                     const res = await axios.get(`${RAG_BACKEND_URL}${endpoints.google}`);
