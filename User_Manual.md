@@ -254,7 +254,7 @@ When typing in SQL Agent mode, the system helps you with table names:
 ### SQL Agent Tips
 
 ✅ **Good Questions:**
-- "List all active employees"
+- "List all active users"
 - "What is the average order value?"
 - "Show customers from California"
 - "Count total orders this year"

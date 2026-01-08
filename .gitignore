@@ -7,7 +7,7 @@
 /package-lock.json
 # testing
 /coverage
-
+frontend/package-lock.json
 # production
 /build
 
@@ -37,3 +37,4 @@ backend/package-lock.json
 backend/__pycache__
 frontend/node_modules
 backend/mcp_routers/__pycache__
+backend/streamlit

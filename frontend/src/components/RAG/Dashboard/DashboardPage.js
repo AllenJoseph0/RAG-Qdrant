@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import Cookies from 'js-cookie';
-import { Folder, BrainCircuit, ShieldAlert, Key, UploadCloud, Loader2, FileText, PlusSquare, RefreshCw, Trash2, AlertTriangle, FileEdit, Size, Save, X, Database, Download, Edit3, Search } from 'lucide-react';
-import SqlAgentManager from './SqlAgentManager';
-import styles from './rag.styles.js';
-import { RAG_BACKEND_URL, generateUUID, formatBytes, formatDate, formatTime } from './rag.utils';
+import { Folder, BrainCircuit, ShieldAlert, Key, UploadCloud, Loader2, FileText, PlusSquare, RefreshCw, Trash2, AlertTriangle, FileEdit, Size, Save, X, Database, Download, Edit3, Search, Users } from 'lucide-react';
+import SqlAgentManager from '../SqlAgent/SqlAgentManager';
+import styles from './dashboard.styles';
+import { RAG_BACKEND_URL, generateUUID, formatBytes, formatDate, formatTime } from '../rag.utils';
 import {
     CategoryAccessControl,
     RedactionRulebook,
@@ -12,8 +12,11 @@ import {
     ComplianceSelector,
     ComplianceTester,
     ApiKeyManager,
-    SharingManager
-} from './AdminTools';
+    SharingManager,
+    UserApprovalManager
+} from '../Admin/AdminTools';
+
+
 
 
 // ==============================================================================
@@ -231,40 +234,47 @@ const FileManagementModal = ({ category, files = [], username, onClose, onFileDe
 const DashboardPage = ({ currentUser }) => {
     const [dashboardView, setDashboardView] = useState('knowledge');
     return (
-        <div style={{ maxWidth: '1024px', margin: '0 auto', padding: '0 1rem', width: '100%' }}>
-            <header style={styles.header}>
-                <h2 style={styles.headerH2}>Admin Dashboard</h2>
-                <p style={styles.headerSubtitle}>Manage your AI's knowledge, personas, and compliance rules.</p>
-            </header>
-            <div style={styles.dashboardNav}>
-                <button onClick={() => setDashboardView('knowledge')} style={dashboardView === 'knowledge' ? styles.dashboardNavButtonActive : styles.dashboardNavButton}>
-                    <Folder size={18} /> Knowledge Base
-                </button>
-                <button onClick={() => setDashboardView('personas')} style={dashboardView === 'personas' ? styles.dashboardNavButtonActive : styles.dashboardNavButton}>
-                    <BrainCircuit size={18} /> Persona Engine
-                </button>
-                <button onClick={() => setDashboardView('compliance')} style={dashboardView === 'compliance' ? styles.dashboardNavButtonActive : styles.dashboardNavButton}>
-                    <ShieldAlert size={18} /> Compliance
-                </button>
-                <button onClick={() => setDashboardView('apiKeys')} style={dashboardView === 'apiKeys' ? styles.dashboardNavButtonActive : styles.dashboardNavButton}>
-                    <Key size={18} /> API Keys
-                </button>
-                <button onClick={() => setDashboardView('sqlAgent')} style={dashboardView === 'sqlAgent' ? styles.dashboardNavButtonActive : styles.dashboardNavButton}>
-                    <Database size={18} /> SQL Agent
-                </button>
-                {/*
+        <div style={styles.scrollablePage}>
+            <div style={{ maxWidth: '1024px', margin: '0 auto', padding: '0 1rem', width: '100%' }}>
+                <header style={styles.header}>
+                    <h2 style={styles.headerH2}>Admin Dashboard</h2>
+                    <p style={styles.headerSubtitle}>Manage your AI's knowledge, personas, and compliance rules.</p>
+                </header>
+                <div style={styles.dashboardNav}>
+                    <button onClick={() => setDashboardView('knowledge')} style={dashboardView === 'knowledge' ? styles.dashboardNavButtonActive : styles.dashboardNavButton}>
+                        <Folder size={18} /> Knowledge Base
+                    </button>
+                    <button onClick={() => setDashboardView('personas')} style={dashboardView === 'personas' ? styles.dashboardNavButtonActive : styles.dashboardNavButton}>
+                        <BrainCircuit size={18} /> Persona Engine
+                    </button>
+                    <button onClick={() => setDashboardView('compliance')} style={dashboardView === 'compliance' ? styles.dashboardNavButtonActive : styles.dashboardNavButton}>
+                        <ShieldAlert size={18} /> Compliance
+                    </button>
+                    <button onClick={() => setDashboardView('apiKeys')} style={dashboardView === 'apiKeys' ? styles.dashboardNavButtonActive : styles.dashboardNavButton}>
+                        <Key size={18} /> API Keys
+                    </button>
+                    <button onClick={() => setDashboardView('sqlAgent')} style={dashboardView === 'sqlAgent' ? styles.dashboardNavButtonActive : styles.dashboardNavButton}>
+                        <Database size={18} /> SQL Agent
+                    </button>
+                    <button onClick={() => setDashboardView('users')} style={dashboardView === 'users' ? styles.dashboardNavButtonActive : styles.dashboardNavButton}>
+                        <Users size={18} /> User Approvals
+                    </button>
+
+                    {/*
                  <button onClick={() => setDashboardView('share')} style={dashboardView === 'share' ? styles.dashboardNavButtonActive : styles.dashboardNavButton}>
                     <Share2 size={18}/> Sharing Manager
                 </button>
                 */}
 
+                </div>
+                {dashboardView === 'knowledge' && <KnowledgeBaseManager currentUser={currentUser} />}
+                {dashboardView === 'personas' && <PersonaManager currentUser={currentUser} />}
+                {dashboardView === 'compliance' && <ComplianceManager currentUser={currentUser} />}
+                {dashboardView === 'apiKeys' && <ApiKeyManager currentUser={currentUser} />}
+                {dashboardView === 'sqlAgent' && <SqlAgentManager currentUser={currentUser} />}
+                {dashboardView === 'users' && <UserApprovalManager currentUser={currentUser} />}
+                {dashboardView === 'share' && <SharingManager currentUser={currentUser} />}
             </div>
-            {dashboardView === 'knowledge' && <KnowledgeBaseManager currentUser={currentUser} />}
-            {dashboardView === 'personas' && <PersonaManager currentUser={currentUser} />}
-            {dashboardView === 'compliance' && <ComplianceManager currentUser={currentUser} />}
-            {dashboardView === 'apiKeys' && <ApiKeyManager currentUser={currentUser} />}
-            {dashboardView === 'sqlAgent' && <SqlAgentManager currentUser={currentUser} />}
-            {dashboardView === 'share' && <SharingManager currentUser={currentUser} />}
         </div>
     );
 };

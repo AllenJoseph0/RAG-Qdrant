@@ -39,3 +39,4 @@ torchaudio==2.9.0
 unstructured[pptx,pdf,docx]==0.18.15
 spacy
 mcp
+duckduckgo-search

@@ -4,8 +4,8 @@ import Cookies from 'js-cookie';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Bot, User, Loader2, ArrowUp, Folder, FileText, Trash2, RefreshCw, UploadCloud, PlusSquare, AlertTriangle, Settings, X, Square, Play, Search, ShieldCheck, Star, FileEdit, BrainCircuit, MessageSquare, Save, ChevronDown, Mic, Database } from 'lucide-react';
-import styles from './rag.styles.js';
-import { RAG_BACKEND_URL } from './rag.utils';
+import styles from './query.styles';
+import { RAG_BACKEND_URL } from '../rag.utils';
 
 // ==============================================================================
 // Query Interface Components
@@ -92,12 +92,14 @@ const QueryView = ({ currentUser }) => {
     }
 
     return (
-        <div style={{ maxWidth: '1024px', margin: '0 auto' }}>
-            <header style={styles.header}>
-                <h2 style={styles.headerH2}>Choose a Knowledge Base</h2>
-                <p style={styles.headerSubtitle}>Select a knowledge base to start a conversation.</p>
-            </header>
-            <CategorySelector categories={categories} onSelect={handleSelectCategory} />
+        <div style={styles.scrollablePage}>
+            <div style={{ maxWidth: '1024px', margin: '0 auto' }}>
+                <header style={styles.header}>
+                    <h2 style={styles.headerH2}>Choose a Knowledge Base</h2>
+                    <p style={styles.headerSubtitle}>Select a knowledge base to start a conversation.</p>
+                </header>
+                <CategorySelector categories={categories} onSelect={handleSelectCategory} />
+            </div>
         </div>
     );
 };
@@ -473,16 +475,40 @@ const QueryInterface = ({ currentUser, owner, category, selectedCategory, person
                     session_id: sessionIdRef.current
                 };
 
-                // 1. Generate SQL
-                const genResp = await axios.post(`${RAG_BACKEND_URL}/api/sql_agent/generate`, sqlPayload, { signal: controller.signal });
+                // 1. Ask (Generate + Execute)
+                const genResp = await axios.post(`${RAG_BACKEND_URL}/api/sql_agent/ask`, sqlPayload, { signal: controller.signal });
 
                 if (genResp.data.success && genResp.data.sql) {
                     const generatedSql = genResp.data.sql;
+                    const results = genResp.data.results;
+                    const count = genResp.data.count;
 
                     answer = `**Generated SQL:**\n\`\`\`sql\n${generatedSql}\n\`\`\``;
 
+                    if (results && Array.isArray(results) && results.length > 0) {
+                        try {
+                            const headers = Object.keys(results[0]);
+                            const tableHeader = `| ${headers.join(' | ')} |`;
+                            const tableDivider = `| ${headers.map(() => '---').join(' | ')} |`;
+                            const tableRows = results.slice(0, 10).map(row =>
+                                `| ${headers.map(h => {
+                                    const val = row[h];
+                                    return (typeof val === 'object' && val !== null) ? JSON.stringify(val) : val;
+                                }).join(' | ')} |`
+                            ).join('\n');
+
+                            answer += `\n\n**Query Results (${count || results.length}):**\n${tableHeader}\n${tableDivider}\n${tableRows}`;
+                            if (results.length > 10) answer += `\n\n*(Showing first 10 rows)*`;
+                        } catch (fmtErr) {
+                            console.error("Error formatting table", fmtErr);
+                            answer += `\n\n**Results:**\n\`\`\`json\n${JSON.stringify(results.slice(0, 3), null, 2)}\n...\n\`\`\``;
+                        }
+                    } else if (results) {
+                        answer += `\n\n*Query executed successfully. No data returned.*`;
+                    }
+
                 } else {
-                    throw new Error(genResp.data.error || "Failed to generate SQL from your question.");
+                    throw new Error(genResp.data.error || "Failed to generate or execute SQL.");
                 }
                 sources = [];
             } else {
@@ -812,7 +838,11 @@ const QueryInterface = ({ currentUser, owner, category, selectedCategory, person
                         <div style={styles.chatHistoryContent}>
                             {chat.length === 0 && <div style={styles.emptyChat}><Bot size={48} /><h2>How can I help you?</h2><p>Ask a question about the content in '{category}' while I act as '{persona.name}'.</p></div>}
                             {chat.map((m, i) => {
-                                const uniqueSources = m.sources?.length > 0 ? [...new Set(m.sources.map(s => s.source.split('/').pop()))] : [];
+                                const uniqueSources = m.sources?.length > 0 ? [...new Set(m.sources.map(s => {
+                                    // Handle both forward and backward slashes for cross-platform compatibility
+                                    const parts = s.source.split(/[/\\]/);
+                                    return parts.pop();
+                                }))] : [];
                                 return (
                                     <div key={i} style={m.sender === 'user' ? styles.userMessage : styles.aiMessage}>
                                         <div style={styles.messageAvatar}>{m.sender === 'user' ? <User size={20} /> : <Bot size={20} />}</div>

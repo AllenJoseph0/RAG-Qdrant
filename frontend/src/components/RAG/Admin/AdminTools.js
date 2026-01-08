@@ -4,8 +4,8 @@ import Cookies from 'js-cookie';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Loader2, TestTube2, FileEdit, Save, ShieldCheck, BrainCircuit, ShieldAlert, PlusSquare, Trash2, Key, X, Share2, Users, Folder, UserX } from 'lucide-react';
-import styles from './rag.styles.js';
-import { RAG_BACKEND_URL } from './rag.utils';
+import styles from './admin.styles';
+import { RAG_BACKEND_URL } from '../rag.utils';
 
 // ==============================================================================
 // Compliance Tester Component
@@ -226,17 +226,7 @@ export const CategoryAccessControl = ({ categoryName, initialPermissions, adminI
                                 <span className="slider"></span>
                             </label>
                         </div>
-                        <div style={styles.permissionUserRow}>
-                            <span>Visible to Basic Users</span>
-                            <label className="switch">
-                                <input
-                                    type="checkbox"
-                                    checked={permissions.basic}
-                                    onChange={(e) => handlePermissionChange('basic', e.target.checked)}
-                                />
-                                <span className="slider"></span>
-                            </label>
-                        </div>
+
                     </div>
                 </>
             )}
@@ -613,7 +603,7 @@ export const ApiKeyEditModal = ({ keyData, onSave, onCancel }) => {
 // Share RAG Manager Component
 // ==============================================================================
 export const SharingManager = ({ currentUser }) => {
-    const [employees, setEmployees] = useState([]);
+    const [users, setUsers] = useState([]);
     const [allShares, setAllShares] = useState({}); // { granteeId: [{ownerId, categoryName}, ...], ... }
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState('');
@@ -625,11 +615,11 @@ export const SharingManager = ({ currentUser }) => {
         setIsLoading(true);
         try {
             const fid = currentUser.firmId || Cookies.get('firmid');
-            const [empRes, sharesRes] = await Promise.all([
-                axios.get(`${RAG_BACKEND_URL}/api/employees?excludeId=${currentUser.id}`),
+            const [userRes, sharesRes] = await Promise.all([
+                axios.get(`${RAG_BACKEND_URL}/api/users/list?excludeId=${currentUser.id}`),
                 axios.get(`${RAG_BACKEND_URL}/api/rag/shares/${fid}`)
             ]);
-            setEmployees(empRes.data || []);
+            setUsers(userRes.data || []);
             setAllShares(sharesRes.data || {});
         } catch (err) {
             setError("Failed to load sharing data.");
@@ -668,13 +658,13 @@ export const SharingManager = ({ currentUser }) => {
         return <div style={styles.loadingContainer}><Loader2 style={styles.spinner} /> Loading...</div>;
     }
 
-    const employeeMap = employees.reduce((acc, emp) => {
-        acc[emp.EMPID] = emp;
+    const userMap = users.reduce((acc, usr) => {
+        acc[usr.USER_ID] = usr;
         return acc;
     }, {});
 
-    const sharesByEmployee = Object.entries(allShares).map(([granteeId, shares]) => ({
-        employee: employeeMap[granteeId] || { EMPID: granteeId, EMPNAME: `Unknown User (${granteeId})` },
+    const sharesByUser = Object.entries(allShares).map(([granteeId, shares]) => ({
+        user: userMap[granteeId] || { USER_ID: granteeId, USER_NAME: `Unknown User (${granteeId})` },
         shares: shares
     }));
 
@@ -684,21 +674,21 @@ export const SharingManager = ({ currentUser }) => {
             {success && <div style={{ ...styles.alert, ...styles.alertSuccess, marginTop: '1rem' }}>{success}</div>}
             {error && <div style={{ ...styles.alert, ...styles.alertDanger, marginTop: '1rem' }}>{error}</div>}
 
-            <GrantAccessForm currentUser={currentUser} employees={employees} allShares={allShares} onShare={fetchData} />
+            <GrantAccessForm currentUser={currentUser} users={users} allShares={allShares} onShare={fetchData} />
 
             <div style={styles.card}>
                 <div style={styles.cardHeader}><Users size={20} /> Current Sharing Permissions</div>
                 <div style={styles.cardBody}>
-                    {sharesByEmployee.length === 0 ? (
+                    {sharesByUser.length === 0 ? (
                         <p style={{ textAlign: 'left', padding: 0 }}>You have not shared any knowledge bases.</p>
                     ) : (
-                        sharesByEmployee.map(({ employee, shares }) => (
-                            <div key={employee.EMPID} style={styles.shareGroup}>
-                                <h3 style={styles.shareGroupTitle}>{employee.EMPNAME}</h3>
+                        sharesByUser.map(({ user, shares }) => (
+                            <div key={user.USER_ID} style={styles.shareGroup}>
+                                <h3 style={styles.shareGroupTitle}>{user.USER_NAME}</h3>
                                 {shares.map(share => (
                                     <div key={`${share.ownerId}-${share.categoryName}`} style={styles.personaItem}>
                                         <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Folder size={16} /> {share.categoryName}</span>
-                                        <button onClick={() => handleRevoke(employee.EMPID, share.categoryName)} style={styles.buttonDangerOutline}><UserX size={16} /> Revoke</button>
+                                        <button onClick={() => handleRevoke(user.USER_ID, share.categoryName)} style={styles.buttonDangerOutline}><UserX size={16} /> Revoke</button>
                                     </div>
                                 ))}
                             </div>
@@ -710,10 +700,10 @@ export const SharingManager = ({ currentUser }) => {
     );
 };
 
-export const GrantAccessForm = ({ currentUser, employees, allShares, onShare }) => {
+export const GrantAccessForm = ({ currentUser, users, allShares, onShare }) => {
     const [categories, setCategories] = useState([]);
     const [selectedCategory, setSelectedCategory] = useState('');
-    const [selectedEmployee, setSelectedEmployee] = useState('');
+    const [selectedUser, setSelectedUser] = useState('');
     const [isSharing, setIsSharing] = useState(false);
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
@@ -728,9 +718,9 @@ export const GrantAccessForm = ({ currentUser, employees, allShares, onShare }) 
             .catch(() => setError("Could not load your knowledge bases."));
     }, [currentUser.firmId]);
 
-    const availableEmployees = useMemo(() => {
-        if (!selectedCategory || !allShares || !employees) {
-            return employees || [];
+    const availableUsers = useMemo(() => {
+        if (!selectedCategory || !allShares || !users) {
+            return users || [];
         }
 
         const granteesWithAccess = new Set(
@@ -739,21 +729,21 @@ export const GrantAccessForm = ({ currentUser, employees, allShares, onShare }) 
             )
         );
 
-        return employees.filter(emp => !granteesWithAccess.has(String(emp.EMPID)));
-    }, [selectedCategory, employees, allShares]);
+        return users.filter(usr => !granteesWithAccess.has(String(usr.USER_ID)));
+    }, [selectedCategory, users, allShares]);
 
     useEffect(() => {
-        // When the list of available employees changes (e.g., after selecting a different KB),
-        // check if the currently selected employee is still valid. If not, reset it.
-        if (selectedEmployee && !availableEmployees.some(e => String(e.EMPID) === selectedEmployee)) {
-            setSelectedEmployee('');
+        // When the list of available users changes (e.g., after selecting a different KB),
+        // check if the currently selected user is still valid. If not, reset it.
+        if (selectedUser && !availableUsers.some(e => String(e.USER_ID) === selectedUser)) {
+            setSelectedUser('');
         }
-    }, [availableEmployees, selectedEmployee]);
+    }, [availableUsers, selectedUser]);
 
     const handleShare = async (e) => {
         e.preventDefault();
-        if (!selectedCategory || !selectedEmployee) {
-            setError('Please select a knowledge base and an employee.');
+        if (!selectedCategory || !selectedUser) {
+            setError('Please select a knowledge base and a user.');
             return;
         }
         setIsSharing(true);
@@ -763,11 +753,11 @@ export const GrantAccessForm = ({ currentUser, employees, allShares, onShare }) 
             const payload = {
                 ownerId: currentUser.firmId || Cookies.get('firmid'),
                 categoryName: selectedCategory,
-                granteeId: selectedEmployee
+                granteeId: selectedUser
             };
             await axios.post(`${RAG_BACKEND_URL}/api/rag/share`, payload);
-            setSuccess(`Successfully shared '${selectedCategory}' with the selected employee.`);
-            setSelectedEmployee(''); // Reset employee dropdown
+            setSuccess(`Successfully shared '${selectedCategory}' with the selected user.`);
+            setSelectedUser(''); // Reset user dropdown
             onShare(); // Callback to refresh parent
             setTimeout(() => setSuccess(''), 4000);
         } catch (err) {
@@ -798,23 +788,161 @@ export const GrantAccessForm = ({ currentUser, employees, allShares, onShare }) 
                             </select>
                         </div>
                         <div style={styles.formGroup}>
-                            <label style={styles.label}>2. Select Employee to Share With</label>
-                            <select style={styles.input} value={selectedEmployee} onChange={e => setSelectedEmployee(e.target.value)} required disabled={!selectedCategory}>
-                                <option value="" disabled>Choose an employee...</option>
-                                {availableEmployees.map(e => <option key={e.EMPID} value={e.EMPID}>{e.EMPNAME} ({e.TYPE || 'No Designation'})</option>)}
+                            <label style={styles.label}>2. Select User to Share With</label>
+                            <select style={styles.input} value={selectedUser} onChange={e => setSelectedUser(e.target.value)} required disabled={!selectedCategory}>
+                                <option value="" disabled>Choose a user...</option>
+                                {availableUsers.map(e => <option key={e.USER_ID} value={e.USER_ID}>{e.USER_NAME} ({e.TYPE || 'No Designation'})</option>)}
                             </select>
-                            {selectedCategory && availableEmployees.length === 0 && employees.length > 0 && (
-                                <p style={styles.formHelperText}>All employees already have access to this knowledge base.</p>
+                            {selectedCategory && availableUsers.length === 0 && users.length > 0 && (
+                                <p style={styles.formHelperText}>All users already have access to this knowledge base.</p>
                             )}
                         </div>
                     </div>
                     <div style={styles.cardFooter}>
-                        <button type="submit" style={styles.buttonPrimary} disabled={isSharing || !selectedEmployee}>
+                        <button type="submit" style={styles.buttonPrimary} disabled={isSharing || !selectedUser}>
                             {isSharing ? <><Loader2 style={styles.spinner} size={16} /> Granting Access...</> : <><Users size={16} /> Grant Access</>}
                         </button>
                     </div>
                 </form>
             </div>
         </>
+    );
+};
+// ==============================================================================
+// User Approval Manager
+// ==============================================================================
+export const UserApprovalManager = ({ currentUser }) => {
+    const [users, setUsers] = useState([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState('');
+    const [success, setSuccess] = useState('');
+
+    const firmId = Cookies.get('firmid');
+
+    const fetchUsers = useCallback(async () => {
+        if (!firmId) return;
+        setIsLoading(true);
+        try {
+            const res = await axios.get(`${RAG_BACKEND_URL}/api/admin/firm-users?firmId=${firmId}`);
+            setUsers(res.data);
+        } catch (err) {
+            setError('Failed to fetch users.');
+        } finally {
+            setIsLoading(false);
+        }
+    }, [firmId]);
+
+    useEffect(() => {
+        fetchUsers();
+    }, [fetchUsers]);
+
+    const handleStatusChange = async (userId, newStatus) => {
+        try {
+            await axios.put(`${RAG_BACKEND_URL}/api/admin/user-status`, {
+                userId,
+                status: newStatus,
+                firmId
+            });
+            setSuccess(`User status updated to ${newStatus}`);
+            fetchUsers();
+            setTimeout(() => setSuccess(''), 3000);
+        } catch (err) {
+            setError(err.response?.data?.error || 'Failed to update user status.');
+            setTimeout(() => setError(''), 3000);
+        }
+    };
+
+    const formatDate = (dateStr) => {
+        if (!dateStr) return 'N/A';
+        return new Date(dateStr).toLocaleDateString() + ' ' + new Date(dateStr).toLocaleTimeString();
+    };
+
+    if (isLoading) return <div style={styles.loadingContainer}><Loader2 style={styles.spinner} size={24} /> Loading users...</div>;
+
+    const pendingUsers = users.filter(u => u.STATUS === 'Inactive');
+    const activeUsers = users.filter(u => u.STATUS === 'Active');
+
+    return (
+        <div className="fade-in">
+            {success && <div style={{ ...styles.alert, ...styles.alertSuccess, marginTop: '1rem' }}>{success}</div>}
+            {error && <div style={{ ...styles.alert, ...styles.alertDanger, marginTop: '1rem' }}>{error}</div>}
+
+            {/* Pending Approvals Section */}
+            <div style={{ ...styles.card, border: '1px solid #eab308' }}>
+                <div style={styles.cardHeader}>
+                    <ShieldAlert size={20} color="#eab308" /> Pending Approvals ({pendingUsers.length})
+                </div>
+                <div style={styles.cardBody}>
+                    {pendingUsers.length === 0 ? (
+                        <p style={{ color: 'var(--muted-foreground)' }}>No pending user registrations.</p>
+                    ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                            {pendingUsers.map(u => (
+                                <div key={u.USER_ID} style={{ ...styles.personaItem, borderLeft: '4px solid #eab308' }}>
+                                    <div style={{ flex: 1 }}>
+                                        <h3 style={styles.personaName}>{u.USER_NAME} <span style={{ fontSize: '0.8rem', fontWeight: 'normal', color: '#888' }}>({u.USERNAME})</span></h3>
+                                        <p style={styles.personaPrompt}><strong>Email:</strong> {u.EMAIL}</p>
+                                        <p style={styles.personaPrompt}><strong>Role:</strong> {u.ROLE}</p>
+                                        <p style={styles.personaPrompt}><strong>Designation:</strong> {u.DESIGNATION || 'N/A'}</p>
+                                        <p style={{ fontSize: '0.8rem', color: '#666', marginTop: '0.25rem' }}>Registered: {formatDate(u.CREATED_DATE)}</p>
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                        <button
+                                            onClick={() => handleStatusChange(u.USER_ID, 'Active')}
+                                            style={styles.buttonSuccess}
+                                        >
+                                            Approve
+                                        </button>
+                                        {/* Reject effectively leaves them Inactive, or we could add Delete later. For now, simply ignoring keeps them inactive. */}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Active Users Section */}
+            <div style={{ ...styles.card, marginTop: '2rem' }}>
+                <div style={styles.cardHeader}>
+                    <Users size={20} /> Active Users ({activeUsers.length})
+                </div>
+                <div style={styles.cardBody}>
+                    {activeUsers.length === 0 ? (
+                        <p>No active users found.</p>
+                    ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                            {activeUsers.map(u => (
+                                <div key={u.USER_ID} style={styles.personaItem}>
+                                    <div style={{ flex: 1 }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <h3 style={styles.personaName}>{u.USER_NAME}</h3>
+                                            {u.ROLE === 'ADMIN' && <span style={styles.apiKeyTypeChip}>ADMIN</span>}
+                                        </div>
+                                        <p style={styles.personaPrompt}>{u.EMAIL}</p>
+                                        <p style={{ fontSize: '0.8rem', color: '#666' }}>Joined: {formatDate(u.CREATED_DATE)}</p>
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                                        {/* Don't allow self-deactivation if it's the current user, ID check required. 
+                                            Assuming currentUser.id is string, u.USER_ID is int. safely compare.
+                                        */}
+                                        {String(u.USER_ID) !== String(currentUser.id) ? (
+                                            <button
+                                                onClick={() => handleStatusChange(u.USER_ID, 'Inactive')}
+                                                style={{ ...styles.buttonDangerOutline, padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+                                            >
+                                                Deactivate
+                                            </button>
+                                        ) : (
+                                            <span style={{ fontSize: '0.8rem', color: '#888', fontStyle: 'italic' }}>You (Admin)</span>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
     );
 };

@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { Database, Save, Trash2, RefreshCw, Activity, CheckCircle, AlertTriangle, Layers, Server, ShieldCheck } from 'lucide-react';
-import { RAG_BACKEND_URL } from './rag.utils';
-import styles from './rag.styles.js';
+import { RAG_BACKEND_URL } from '../rag.utils';
+import styles from './sqlAgent.styles';
 
 const SqlAgentManager = ({ currentUser }) => {
     const [configs, setConfigs] = useState([]);

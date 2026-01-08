@@ -11,6 +11,7 @@ CACHE_DURATION = 60  # seconds
 
 @sql_bp.route('/connect', methods=['POST', 'DELETE'])
 def connect_db():
+    from .metrics import log_rag_metric
     if request.method == 'DELETE':
         firm_id = request.args.get('firm_id') or request.json.get('firm_id')
         if not firm_id:
@@ -116,6 +117,10 @@ def generate_sql():
 @sql_bp.route('/ask', methods=['POST'])
 def ask_question():
     """End-to-end endpoint: Generate + Execute"""
+    from .metrics import log_rag_metric
+    import time
+    start_time = time.time()
+
     data = request.json
     firm_id = data.get('firm_id')
     user_id = data.get('user_id') # Optional but recommended
@@ -127,16 +132,70 @@ def ask_question():
     # 1. Generate
     gen_result = generate_sql_query(user_query, firm_id, user_id=user_id)
     if not gen_result['success']:
+        # Log failure
+        latency_ms = int((time.time() - start_time) * 1000)
+        try:
+            log_rag_metric(
+                firm_id=firm_id,
+                user_id=user_id,
+                query_text=user_query,
+                query_type="sql_agent",
+                response_text=gen_result.get("error"),
+                latency_ms=latency_ms,
+                success=False,
+                error_message=gen_result.get("error"),
+                sql_executed=None
+            )
+        except Exception as e:
+            print(f"Metrics log failed: {e}")
+
         # Return generic error instead of strictly 500 to handle known config issues gracefully
         return jsonify({"step": "generation", "error": gen_result.get("error")}), 400 
         
     sql = gen_result['sql']
     
-    # Return ONLY the SQL as requested
+    # 2. Execute
+    exec_result = execute_generated_sql(sql, firm_id)
+    latency_ms = int((time.time() - start_time) * 1000)
+    
+    success = exec_result['success']
+    results = exec_result.get("results")
+    row_count = exec_result.get("count", 0)
+    error_msg = exec_result.get("error")
+    
+    # Format response text for logging
+    response_text = f"SQL Executed. Rows: {row_count}" if success else f"Execution Failed: {error_msg}"
+
+    try:
+        log_rag_metric(
+            firm_id=firm_id,
+            user_id=user_id,
+            query_text=user_query,
+            query_type="sql_agent",
+            response_text=response_text,
+            latency_ms=latency_ms,
+            success=success,
+            error_message=error_msg,
+            sql_executed=sql,
+            context_docs_count=0 # No docs context in this flow explicitly known here without digging into generate_sql_query
+        )
+    except Exception as e:
+        print(f"Metrics log failed: {e}")
+
+    if not success:
+        return jsonify({
+            "success": False,
+            "sql": sql,
+            "error": error_msg,
+            "message": "SQL generated but execution failed."
+        }), 500
+
     return jsonify({
         "success": True,
         "sql": sql,
-        "message": "SQL generated successfully. Execution skipped."
+        "results": results,
+        "count": row_count,
+        "message": "SQL generated and executed successfully."
     })
 
 @sql_bp.route('/sync', methods=['POST'])

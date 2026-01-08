@@ -615,7 +615,7 @@ app.post('/api/rag/query', async (req, res) => {
 
 
 // ============================================================================
-// 11) USERS & EMPLOYEES
+// 11) USERS & LOGIN
 // ============================================================================
 app.post('/api/users/sync', async (req, res) => {
   const { id, name, role } = req.body || {};
@@ -633,32 +633,239 @@ app.post('/api/users/sync', async (req, res) => {
   res.json(found);
 });
 
-app.get('/api/employees', async (req, res) => {
-  // SECURITY FIX: Exclude the current user from the list of employees to share with.
-  // NOTE: The frontend must be updated to send the current user's ID as a query parameter.
-  // e.g., GET /api/employees?excludeId=123
+// Get Firms List (for registration)
+app.get('/api/firms', async (req, res) => {
+  try {
+    const [rows] = await dbPool.query('SELECT FIRM_ID, FIRM_NAME FROM FIRM_MASTER WHERE STATUS = ?', ['Active']);
+    res.json(rows);
+  } catch (e) {
+    logger.error('Failed to fetch firms', e);
+    res.status(500).json({ error: "Failed to fetch firms" });
+  }
+});
+
+// Register Endpoint
+app.post('/api/register', async (req, res) => {
+  const { name, username, password, email, firmId, role, designation, company } = req.body;
+
+  // Basic validation
+  if (!name || !username || !password || !firmId || !role) {
+    return res.status(400).json({ error: "Name, Username, Password, Firm ID, and Role are required." });
+  }
+
+  try {
+    // 1. Validate Firm ID exists in FIRM_MASTER
+    const [firmCheck] = await dbPool.query('SELECT FIRM_ID, FIRM_NAME FROM FIRM_MASTER WHERE FIRM_ID = ?', [firmId]);
+
+    if (firmCheck.length === 0) {
+      return res.status(400).json({ error: "Invalid Firm ID. Please contact your Super Admin or System Owner." });
+    }
+
+    // 2. Check if username already exists
+    const [existing] = await dbPool.query('SELECT USER_ID FROM USER_REGISTRATION WHERE USERNAME = ?', [username]);
+    if (existing.length > 0) {
+      return res.status(409).json({ error: "Username already exists." });
+    }
+
+    // 3. Insert new user
+    // Note: ROLE is ENUM('SUPER_ADMIN', 'ADMIN', 'BUSINESS_USER')
+    // We map frontend inputs to these exact ENUM values.
+    const validRoles = ['ADMIN', 'BUSINESS_USER'];
+    // Allow Super Admin creation if needed, but usually limited. 
+    // For now restrict to Admin/Business.
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({ error: "Invalid Role. Allowed: ADMIN, BUSINESS_USER" });
+    }
+
+    // NEW: Enforce 1 Admin per specific Firm (Company)
+    if (role === 'ADMIN') {
+      const [existingAdmins] = await dbPool.query(
+        "SELECT USER_ID FROM USER_REGISTRATION WHERE FIRM_ID = ? AND ROLE = 'ADMIN' AND STATUS = 'Active'",
+        [firmId]
+      );
+      if (existingAdmins.length > 0) {
+        return res.status(409).json({ error: "An Admin already exists for this company. Only one Admin is allowed." });
+      }
+    }
+
+    // Default status: ADMIN is Active immediately, BUSINESS_USER is Inactive (pending approval)
+    const initialStatus = role === 'ADMIN' ? 'Active' : 'Inactive';
+
+    const sql = `
+            INSERT INTO USER_REGISTRATION 
+            (USER_NAME, USERNAME, PASSWORD, EMAIL, FIRM_ID, ROLE, DESIGNATION, COMPANY, STATUS, CREATED_DATE)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        `;
+
+    // Use the validated firm name as company if not provided
+    const userCompany = company || firmCheck[0].FIRM_NAME;
+
+    await dbPool.query(sql, [name, username, password, email, firmId, role, designation || '', userCompany, initialStatus]);
+
+    logger.info('New user registered', { username, firmId, role, status: initialStatus });
+
+    // Custom message based on status
+    const msg = initialStatus === 'Active'
+      ? "Registration successful. Please login."
+      : "Registration successful! Your account is pending approval by your company admin.";
+
+    res.status(201).json({ success: true, message: msg });
+
+  } catch (e) {
+    logger.error('Registration failed', { error: e.message });
+    res.status(500).json({ error: "Registration failed. " + e.message });
+  }
+});
+
+// Login Endpoint
+app.post('/api/login', async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: "Username and password are required" });
+  }
+
+  try {
+    const sql = `
+            SELECT USER_ID, USER_NAME, ROLE, FIRM_ID, STATUS, USERNAME, PASSWORD
+            FROM USER_REGISTRATION
+            WHERE USERNAME = ?
+        `;
+    const [rows] = await dbPool.query(sql, [username]);
+
+    if (rows.length === 0) {
+      return res.status(401).json({ error: "Invalid credentials." });
+    }
+
+    const user = rows[0];
+
+    // Plain text password check
+    if (user.PASSWORD !== password) {
+      return res.status(401).json({ error: "Invalid credentials." });
+    }
+
+    if (user.STATUS !== 'Active') {
+      return res.status(403).json({ error: "Your account is not active. Please contact your administrator." });
+    }
+
+    // Map ROLE to unified frontend role (admin vs business)
+    // SUPER_ADMIN and ADMIN -> 'admin'
+    // BUSINESS_USER -> 'business'
+    let frontendRole = 'business';
+    if (user.ROLE === 'SUPER_ADMIN' || user.ROLE === 'ADMIN') {
+      frontendRole = 'admin';
+    }
+
+    res.json({
+      success: true,
+      user: {
+        id: user.USER_ID.toString(),
+        name: user.USER_NAME,
+        username: user.USERNAME,
+        role: frontendRole,
+        dbRole: user.ROLE,
+        firmId: user.FIRM_ID ? user.FIRM_ID.toString() : null
+      }
+    });
+
+  } catch (e) {
+    logger.error('Login failed', { error: e.message });
+    res.status(500).json({ error: "Login failed" });
+  }
+});
+
+// Get Users List (Public/Shared - kept for backward compatibility if needed, but we recommend using firm-users for admin)
+app.get('/api/users/list', async (req, res) => {
+  // Exclude current user
   const { excludeId } = req.query;
 
   try {
+    // Return USER_ID, USER_NAME, ROLE (mapped to TYPE for compatibility)
     let sql = `
-            SELECT EMPID, EMPNAME, STATUS, FIRM_ID, TYPE
-            FROM EMPLOY_REGISTRATION
-            WHERE STATUS = 'Active' AND TYPE = 'Employe'
+            SELECT USER_ID, USER_NAME, STATUS, FIRM_ID, ROLE
+            FROM USER_REGISTRATION
+            WHERE STATUS = 'Active'
         `;
     const params = [];
 
     if (excludeId) {
-      sql += ' AND EMPID != ?';
+      sql += ' AND USER_ID != ?';
       params.push(excludeId);
+      // In a real scenario, we'd also filter by FIRM_ID here 
     }
 
     const [rows] = await dbPool.query(sql, params);
-    res.json(rows);
+
+    const mapped = rows.map(r => ({
+      ...r,
+      TYPE: r.ROLE // Alias for legacy frontend support
+    }));
+
+    res.json(mapped);
   } catch (e) {
-    logger.error('Failed to fetch employees', { error: e.message });
-    res.status(500).json({ error: 'Failed to fetch employee list.' });
+    logger.error('Failed to fetch users', { error: e.message });
+    res.status(500).json({ error: "Failed to fetch users" });
   }
 });
+
+// ============================================================================
+// 11.5) ADMIN USER MANAGEMENT
+// ============================================================================
+
+// Get all users for a specific firm (for Admin Dashboard)
+app.get('/api/admin/firm-users', async (req, res) => {
+  const { firmId } = req.query;
+  if (!firmId) return res.status(400).json({ error: 'Firm ID is required' });
+
+  try {
+    const sql = `
+            SELECT USER_ID, USER_NAME, USERNAME, EMAIL, ROLE, DESIGNATION, STATUS, CREATED_DATE
+            FROM USER_REGISTRATION
+            WHERE FIRM_ID = ?
+            ORDER BY CREATED_DATE DESC
+        `;
+    const [rows] = await dbPool.query(sql, [firmId]);
+    res.json(rows);
+  } catch (e) {
+    logger.error('Failed to fetch firm users', e);
+    res.status(500).json({ error: "Failed to fetch users." });
+  }
+});
+
+// Update User Status (Approve/Reject/Deactivate)
+app.put('/api/admin/user-status', async (req, res) => {
+  const { userId, status, firmId } = req.body;
+
+  if (!userId || !status || !firmId) {
+    return res.status(400).json({ error: "User ID, Status, and Firm ID are required." });
+  }
+
+  if (!['Active', 'Inactive'].includes(status)) {
+    return res.status(400).json({ error: "Invalid status." });
+  }
+
+  try {
+    // Security check: Ensure the user belongs to the requester's firm
+    // In a real app, we'd check the requester's session/cookie here too, but we rely on the passed firmId 
+    // matches the admin's firmId from the frontend (Client-side trust for this demo context, ideally server session).
+
+    const [userCheck] = await dbPool.query('SELECT FIRM_ID FROM USER_REGISTRATION WHERE USER_ID = ?', [userId]);
+    if (userCheck.length === 0) return res.status(404).json({ error: "User not found." });
+
+    if (userCheck[0].FIRM_ID != firmId) {
+      return res.status(403).json({ error: "Unauthorized: User belongs to a different firm." });
+    }
+
+    await dbPool.query('UPDATE USER_REGISTRATION SET STATUS = ? WHERE USER_ID = ?', [status, userId]);
+
+    logger.info('User status updated', { userId, status, firmId });
+    res.json({ success: true, message: `User status updated to ${status}` });
+
+  } catch (e) {
+    logger.error('Failed to update user status', e);
+    res.status(500).json({ error: "Failed to update status." });
+  }
+});
+
 
 
 // ============================================================================

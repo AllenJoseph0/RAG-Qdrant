@@ -61,6 +61,9 @@ from elevenlabs.client import ElevenLabs
 from mcp_routers import sql_bp
 from mcp_routers.sql_mcp import mcp_bp
 from mcp_routers.file_mcp import file_mcp_bp
+from mcp_routers.file_mcp import file_mcp_bp
+from mcp_routers.metrics import log_rag_metric
+from mcp_routers.web_search import get_web_search_tool
 
 load_dotenv()
 
@@ -1005,30 +1008,76 @@ def query_classification_node(state: GraphState) -> GraphState:
                 "original_question": state['question']
             }
         
-        # Otherwise, use automatic classification
-        # Initialize query classifier
-        query_classifier = create_query_classifier(state['llm'])
+
+        # --- Check for SQL Schema Availability ---
+        # Before autonomous classification, check if any SQL schema is indexed for this firm.
+        firm_id = state['firm_id']
+        schema_collection_name = f"sql-schema-{firm_id}"
+        schema_available = False
+        try:
+            # Quick status check
+            sc_info = qdrant.get_collection(schema_collection_name)
+            if sc_info.status == CollectionStatus.GREEN and sc_info.points_count > 0:
+                schema_available = True
+        except Exception:
+            schema_available = False
+
+        if not schema_available:
+            logger.info(f"No SQL schema index found for firm {firm_id}. Skipping SQL classification.")
+            # If no schema, we restrict classification to document_rag or web_search
+             # --- Autonomous Classification (Restricted) ---
+            classifier_prompt_template = """
+            You are an intelligent query router. Your task is to classify the user's question into one of the following types:
+            
+            1. "document_rag": For questions about internal documents, policies, reports, or specific file content uploaded to the system.
+            2. "web_search": For questions about current events, external news, competitor analysis, market trends, or general public knowledge not specific to the internal company data.
+            3. "hybrid": For complex queries (though without SQL schema, this will likely fallback to docs).
+
+            User Question: "{question}"
+
+            Respond with a single JSON object containing:
+            - "category": One of ["document_rag", "web_search", "hybrid"]
+            - "confidence": A float between 0.0 and 1.0
+            - "reason": A brief explanation.
+            """
+        else:
+             # --- Autonomous Classification (Full) ---
+            classifier_prompt_template = """
+            You are an intelligent query router. Your task is to classify the user's question into one of the following types:
+            
+            1. "document_rag": For questions about internal documents, policies, reports, or specific file content uploaded to the system.
+            2. "sql_generation": For questions about structured data, database records, statistics, counts, or specific metrics (e.g., "How many users...", "Show me the sales for...").
+            3. "web_search": For questions about current events, external news, competitor analysis, market trends, or general public knowledge not specific to the internal company data.
+            4. "hybrid": For questions that require BOTH internal document context AND structured database credentials/data (complex multi-hop queries).
+
+            User Question: "{question}"
+
+            Respond with a single JSON object containing:
+            - "category": One of ["document_rag", "sql_generation", "web_search", "hybrid"]
+            - "confidence": A float between 0.0 and 1.0
+            - "reason": A brief explanation.
+            """
         
-        # Get available tables for classification context
-        # In the new dynamic system, we might fetch this from the service if needed.
-        # For now, we pass an empty list or a placeholder as the classifier might typically need table names.
-        # To make it robust, we can quickly fetch table names using sql_service if we want precise classification.
-        # But to avoid overhead, we'll assume any data query is SQL for now or let the classifier decide based on semantics.
-        available_tables = [] 
+        prompt = ChatPromptTemplate.from_template(classifier_prompt_template)
+        chain = prompt | state['llm'] | JsonOutputParser()
         
-        # Classify the query
-        classification = query_classifier.classify_query(
-            state['question'], 
-            available_tables
-        )
-        
-        logger.info(f"Query classified as: {classification.query_type} (confidence: {classification.confidence})")
+        try:
+            result = chain.invoke({"question": state['question']})
+            query_type = result.get("category", "document_rag")
+            confidence = result.get("confidence", 0.0)
+            reason = result.get("reason", "")
+        except Exception as e:
+            logger.warning(f"Classification LLM failed, defaulting to document_rag: {e}")
+            query_type = "document_rag"
+            confidence = 0.0
+            
+        logger.info(f"Query classified as: {query_type} (confidence: {confidence}) - {reason}")
         
         return {
             **state, 
-            "query_type": classification.query_type,
-            "classification_confidence": classification.confidence,
-            "original_question": state['question']  # Store original for later use
+            "query_type": query_type,
+            "classification_confidence": confidence,
+            "original_question": state['question']
         }
         
     except Exception as e:
@@ -1077,13 +1126,22 @@ def sql_generation_node(state: GraphState) -> GraphState:
             pass
 
         if not schema_context:
+             logger.info("No relevant schema tables found for SQL generation. Falling back to Document RAG strategy.")
+             # Fallback logic: Use the original question and route to document retrieval
+             # Since edges are hardcoded, we return a special response that indicates fallback or handle it here?
+             # Easier approach: Return a response that says "I looked for data but need to search documents." -> But we want it seamless.
+             
+             # HACK: If we return query_type="document_rag" here, and update the state, 
+             # the NEXT node would theoretically be update_call_state which ends.
+             # So we must modify the graph or perform the RAG logic HERE manually (calling `retrieve_documents_node` logic).
+             # Or we can just return a failure message which is safer.
              return {
                 **state,
-                "response": "I cannot answer this data question because the database schema isn't indexed or no relevant tables were found. Please sync the schema in Admin Dashboard.",
+                "response": "I couldn't find any relevant database tables to answer this question.",
                 "sql_results": None,
                 "context": []
             }
-
+        
         # 2. Generate SQL using LLM with filtered schema
         try:
             groq_api_key = fetch_llm_api_key(firm_id, user_id, 'GROQ')
@@ -1110,10 +1168,20 @@ Instructions:
 1. Use ONLY the provided tables. Do not hallucinate columns.
 2. If the user asks for "all today", use CURDATE().
 3. Generate valid MySQL SQL.
-4. Return ONLY the SQL query. No markdown formatting.
+4. If the question cannot be answered with these tables, return ONLY the word "IMPOSSIBLE".
+5. Return ONLY the SQL query. No markdown formatting.
             """
             response = llm.invoke(prompt)
             sql = response.content.strip().replace("```sql", "").replace("```", "").strip()
+            
+            if "IMPOSSIBLE" in sql:
+                logger.warning("LLM determined SQL is impossible with given schema.")
+                return {
+                    **state,
+                    "response": "I cannot formulate a SQL query for this request significantly based on available tables.",
+                    "sql_results": None,
+                    "context": []
+                }
             
         except Exception as e:
              logger.error(f"SQL Generation LLM call failed: {e}")
@@ -1389,7 +1457,7 @@ def generate_response_node(state: GraphState) -> GraphState:
     prompt = ChatPromptTemplate.from_messages([
         ("system", active_prompt),
         MessagesPlaceholder("chat_history"),
-        ("system", "Context Documents:\n---\n{context_str}\n---"),
+        ("system", "Context Documents (may include Web Search Results):\n---\n{context_str}\n---"),
         ("human", "{question}"),
     ])
 
@@ -1444,6 +1512,37 @@ Respond with ONLY the name of the stage (e.g., 'problem_identification').
     logger.info(f"Updated call state to: '{final_state}'")
     return {**state, "call_state": final_state}
 
+@retry_with_backoff()
+def web_search_node(state: GraphState) -> GraphState:
+    """Executes a web search for the user's query."""
+    logger.info("---LANGGRAPH NODE: web_search_node---")
+    try:
+        question = state['question']
+        search_tool = get_web_search_tool()
+        
+        # Execute search
+        search_results = search_tool.func(question)
+        logger.info(f"Web Search Results Raw: {search_results[:500]}...")
+        
+        # Wrap results in a Document for the context
+        doc = Document(
+            page_content=f"Web Search Results for '{question}':\n\n{search_results}",
+            metadata={"source": "DuckDuckGo Web Search", "type": "web_search"}
+        )
+        
+        return {
+            **state,
+            "context": [doc],
+            # We skip 'turns' increment for tool usage or handle it as part of retrieval
+        }
+    except Exception as e:
+        logger.error(f"Web search failed: {e}")
+        # Fallback to empty context or error message
+        return {
+            **state,
+            "context": [Document(page_content="Web search failed or returned no results.", metadata={"source": "system"})]
+        }
+
 
 def should_continue(state: GraphState) -> str:
     """Determines the next step after a node."""
@@ -1458,10 +1557,13 @@ def route_after_classification(state: GraphState) -> str:
     
     query_type = state.get("query_type", "document_rag")
     
+    
     if query_type == "sql_generation":
         return "sql_generation"
     elif query_type == "hybrid":
         return "hybrid_processing"
+    elif query_type == "web_search":
+        return "web_search"
     else:  # document_rag or fallback
         return "compliance_check"
 
@@ -1483,6 +1585,7 @@ workflow.add_node("hybrid_processing", hybrid_processing_node)
 workflow.add_node("compliance_check", compliance_check_node)
 workflow.add_node("rewrite_query", query_rewrite_node)
 workflow.add_node("retrieve", retrieve_documents_node)
+workflow.add_node("web_search", web_search_node)
 workflow.add_node("generate_response", generate_response_node)
 workflow.add_node("update_call_state", update_call_state_node)
 
@@ -1504,6 +1607,7 @@ workflow.add_conditional_edges(
     {
         "sql_generation": "sql_generation",
         "hybrid_processing": "hybrid_processing", 
+        "web_search": "web_search",
         "compliance_check": "compliance_check",
         "end": END
     }
@@ -1514,6 +1618,9 @@ workflow.add_edge("sql_generation", "update_call_state")
 
 # Hybrid processing path (direct to update_call_state)
 workflow.add_edge("hybrid_processing", "update_call_state")
+
+# Web Search path (routes to generate_response to synthesize answer)
+workflow.add_edge("web_search", "generate_response")
 
 # Document RAG path (traditional flow)
 workflow.add_conditional_edges(
@@ -1604,7 +1711,10 @@ def rag_chain_endpoint():
             "uploaded_file_type": data.get("uploaded_file_type")
         }
 
+        start_time = time.time()
         final_state = lang_graph_app.invoke(initial_state)
+        latency_ms = int((time.time() - start_time) * 1000)
+
         final_answer = apply_redaction_rules(final_state.get("response", "An error occurred."), data.get("rulebook"))
 
         # Don't save context if the LLM failed
@@ -1634,10 +1744,28 @@ def rag_chain_endpoint():
         frontend_query_type_map = {
             "sql_generation": "sql",
             "document_rag": "document",
+            "web_search": "web_search",
             "hybrid": "hybrid"
         }
         frontend_query_type = frontend_query_type_map.get(backend_query_type, "document")
         
+        # Log Metrics
+        try:
+            executed_sql = final_state.get("sql_results", {}).get("executed_sql") if final_state.get("sql_results") else None
+            log_rag_metric(
+                firm_id=firm_id,
+                user_id=data.get('queried_by_id', data.get('owner_id')),
+                query_text=data["question"],
+                query_type=frontend_query_type,
+                response_text=final_answer,
+                latency_ms=latency_ms,
+                success=True,
+                context_docs_count=len(sources),
+                sql_executed=executed_sql
+            )
+        except Exception as log_err:
+            logger.error(f"Failed to log metrics: {log_err}")
+
         # Return the final state so the orchestrator knows the new stage
         return jsonify({
             "answer": final_answer, 
