@@ -40,3 +40,4 @@ unstructured[pptx,pdf,docx]==0.18.15
 spacy
 mcp
 duckduckgo-search
+gunicorn
